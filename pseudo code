@@ -1,0 +1,17 @@
+pseudo code
+
+main loop (no other logic than sensor)
+control thread http thread  (these two should combine together) 
+alert thread 
+
+
+Use case 1: Use dispenser before entry 
+control: 
+	True > don't put payload into pq
+	False > put payload into pq 
+
+Use case 2: Use dispenser after entry
+control: 
+	False > put payload into pq 
+		True > nothing
+		False > alert
