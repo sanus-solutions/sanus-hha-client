@@ -11,7 +11,6 @@ import sys, os, requests, time, json, picamera, io
 from PIL import Image
 import base64
 import numpy as np
-import datetime
 
 """
 	Class to encapsulate the Raspberry Pi IoT device that will be attached to the doorways of hospital patient rooms. 
@@ -43,9 +42,6 @@ class PiClient:
         self.pqueue = queue.PriorityQueue()
         self.msgqueue = queue.PriorityQueue()
         
-        # StaffID list
-        self.staffIDList = []
-        
         # Image place holders
         self.shape = '(480, 640, 3)'
         self.image = np.empty((480, 640, 3), dtype=np.uint8)
@@ -57,17 +53,6 @@ class PiClient:
         # API URL       THE SERVER HOST AND PORT WILL BE IN CONFIG FILE LATER
         self.url = 'http://' + SERVER_HOST + ':' + SERVER_PORT + '/sanushost/api/v1.0/entry_img'
         
-        # Druid Server
-        DRUID_SERVER_HOST = '192.168.0.105'
-        DRUID_SERVER_PORT_DATA = '8200'
-        DRUID_SERVER_PORT_QUERY = '8082'
-        self.DRUID_SERVER_HEADERS = {'Content_Type': 'application/json'}
-
-        # API url Druid       THE SERVER HOST AND PORT WILL BE IN CONFIG FILE LATER
-        self.postData = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_DATA + '/v1/post/hospital'
-        self.postQuery = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_QUERY + '/druid/v2?pretty'
-        
-          
         # Time delay for alert sent in seconds
         self.ALERT_TIME_DELAY = 20
         
@@ -77,45 +62,21 @@ class PiClient:
         self.KLAUS_A = 'aplay -q klausAlert.wav'
         self.KLAUS_W = 'aplay -q klausWelcome.wav'
         self.CLEAN = 'aplay -q clean.wav'
-
-    # Function to send raw data to druid server
-    # Returns: NONE
-    def send_druid_data(self, type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message):
-        time = datetime.datetime.utcnow().isoformat()
         
-        payload = {
-            'time': time,
-            'type': type,
-            'nodeID': nodeID,
-            'staffID': staffID,
-            'staff_title': staff_title,
-            'unit': unit,
-            'room_number': room_number,
-            'response_type': response_type,
-            'response_message': response_message
-        }
-        
-        
-        result = requests.post(self.postData, json=payload, headers=self.DRUID_SERVER_HEADERS)
-        print(result.json())
-        
-        
-
-
     # Function to play .wav files to alert staff members.
     # Returns : NONE
-    def send_alert(self,message):
-        
-        if(message == "LUKA_A"):
-            os.system(self.LUKA_A)
-        elif(message == "LUKA_W"):
-            os.system(self.LUKA_W)
-        elif(message == "KLAUS_W"):
-            os.system(self.KLAUS_W)
-        elif(message == "KLAUS_A"):
-            os.system(self.KLAUS_A)
-        elif(message == "CLEAN"):
-            os.system(self.CLEAN)
+    #def send_alert(self,message):
+    #    
+    #   if(message == "LUKA_A"):
+    #        os.system(self.LUKA_A)
+    #    elif(message == "LUKA_W"):
+    #        os.system(self.LUKA_W)
+    #    elif(message == "KLAUS_W"):
+    #        os.system(self.KLAUS_W)
+    #    elif(message == "KLAUS_A"):
+    #        os.system(self.KLAUS_A)
+    #    elif(message == "CLEAN"):
+    #        os.system(self.CLEAN)
         
     # Peeks at head of pqueue.
     # Returns: The timestamp as the key associated with the tuple.
@@ -156,29 +117,14 @@ class PiClient:
                 # Send post request to the server
                 result = requests.post(self.url, json=payload, headers=headers)
                 
-                print(result.json())
-                
-                # Check here to see if the staffID has been seen in the last 30 seconds.
-                # If not, add it to pqueue, if yes, stop this task and continue
-                if(self.staff_checker(result.json()['Status'][1]) == 0):
-                    # add the staffID and timestamp to list
-                    self.staffIDList.append((result.json()['Status'][1], time.time()))
-                else:
-                    # user is already in the list therefore skip this event
-                    continue
-                
-                # Check the status of the staff member. There will always be a welcome message sent here.
-                # Once the welcome message is sent to the audio device, the payload will be placed in the msqueue to
-                # be sent later to see if a further alert is needed.
-                
-                # type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
+					# Check the status of the staff member. There will always be a welcome message sent here.
+					# Once the welcome message is sent to the audio device, the payload will be placed in the msqueue to
+					# be sent later to see if a further alert is needed.
                 if(result.json()['Status'][0] == True and result.json()['Status'][1] == 'luka'):
-                    self.send_druid_data("entry", self.NODE_ID, "luka", "Nurse", "ICU", "3500", "entry", "not clean")
-##                    self.send_alert("LUKA_W")
+                    #self.send_alert("LUKA_W")
                     self.pqueue = queue.PriorityQueue()
                 if(result.json()['Status'][0] == True and result.json()['Status'][1] == 'klaus'):
-                    self.send_druid_data("entry", self.NODE_ID, "klaus", "Nurse", "ICU", "3500", "entry", "not clean")
-##                    self.send_alert("KLAUS_W")
+                    #self.send_alert("KLAUS_W")
                     self.pqueue = queue.PriorityQueue()
                 
                 # Determine status of person, if there is a staff member face and they are not on dispenser list
@@ -204,50 +150,13 @@ class PiClient:
                 result = requests.post(self.url, json=payload, headers=headers)
 
                 # When the server returns STATUS and NAME of staff member.
-                # Send an alert accordingly.
-                
-                print(result.json())
-                
+                # Send an alert accordingly.               
                 if(result.json()['Status'][0] == True and result.json()['Status'][1] == 'luka'):
-##                    self.send_druid_data("alert", "luka", "nurse", self.NODE_ID, "ICU", "50", "alert", "alert given")
-                    self.send_druid_data("alert", self.NODE_ID, "luka", "Nurse", "ICU", "3500", "alert", "alert given")
-                elif(result.json()['Status'][0] == True and result.json()['Status'][1] == 'klaus'):
-                    self.send_druid_data("alert", self.NODE_ID, "klaus", "Nurse", "ICU", "3500", "alert", "alert given")
-                elif(result.json()['Status'][0] == False and (result.json()['Status'][1] == 'klaus')):
-                    self.send_druid_data("alert", self.NODE_ID, "klaus", "Nurse", "ICU", "3500", "alert", "no alert")
-                elif(result.json()['Status'][0] == False and (result.json()['Status'][1] == 'luka')):
-                    self.send_druid_data("alert", self.NODE_ID, "luka", "Nurse", "ICU", "3500", "alert", "no alert")
-##                if(result.json()['Status'][0] == True and result.json()['Status'][1] == 'luka'):
-##                    self.send_alert("LUKA_A")
+                    #self.send_alert("LUKA_A")
 ##                elif(result.json()['Status'][0] == True and result.json()['Status'][1] == 'klaus'):
-##                    self.send_alert("KLAUS_A")
+##                    #self.send_alert("KLAUS_A")
 ##                elif(result.json()['Status'][0] == False and (result.json()['Status'][1] == 'klaus' or result.json()['Status'][1] == 'luka')):
-##                    self.send_alert("CLEAN")
-                    
-    # #### MIGHT BE REMOVED IN FUTURE RELEASE ####               
-    # Issues arise when a the camera unit takes multiple images of a user at once. This allows multiple alerts to be given for only 1 instance
-    # of a breach. To counteract this, this  will constantly look at users that have had pictures taken in the last 30 secounds so that
-    # a staff member cannot be given multiple alerts
-    # Returns: 0 if it is cleared for the staffID to get an alert
-    #          1 if the staffID should not get an alert
-    def staff_checker(self, staffID):
-        
-        indexOfStaffID = -1
-        
-        try:
-            indexOfStaffID = self.staffIDList.index(staffID)
-        except:
-            # if staffID is not found then return 0 for False not found
-            return 0
-        
-        if(time.time() - self.staffIDList[indexOfStaffID][1] > 30.0):
-            # check timestamps to see if there is at least a 30 sec difference between them 
-            return 0
-        else:
-            # if the time delay is not long enough, disregard this event from getting an alert
-            return 1
-        
-        
+##                    #self.send_alert("CLEAN")
       
 #### MAIN ####
 if __name__ == '__main__':
