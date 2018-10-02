@@ -44,7 +44,10 @@ class PiClient:
         self.msgqueue = queue.PriorityQueue()
         
         # StaffID list
-        self.staffIDList = []
+        self.staffIDList = {}
+        
+        # List of unsuccessful Druid Events
+        self.failedEventsList = []
         
         # Image place holders
         self.shape = '(480, 640, 3)'
@@ -95,11 +98,12 @@ class PiClient:
             'response_message': response_message
         }
         
-        
-        result = requests.post(self.postData, json=payload, headers=self.DRUID_SERVER_HEADERS)
-        print(result.json())
-        
-        
+        try:
+            result = requests.post(self.postData, json=payload, headers=self.DRUID_SERVER_HEADERS)
+            print(result.json())
+        except:
+            # Save the result for later
+            self.failedEventsList.append(payload)
 
 
     # Function to play .wav files to alert staff members.
@@ -144,7 +148,7 @@ class PiClient:
         client.pqueue.put((timestamp, payload, headers))
         
 
-	 # Thread that will run in a loop that will constantly check in the pqueue for any payloads that need to be processed and sent to the server
+    # Thread that will run in a loop that will constantly check in the pqueue for any payloads that need to be processed and sent to the server
     def control_thread(self): # always running on startup
         
         while(True):
@@ -160,9 +164,11 @@ class PiClient:
                 
                 # Check here to see if the staffID has been seen in the last 30 seconds.
                 # If not, add it to pqueue, if yes, stop this task and continue
-                if(self.staff_checker(result.json()['Status'][1]) == 0):
-                    # add the staffID and timestamp to list
-                    self.staffIDList.append((result.json()['Status'][1], time.time()))
+                
+                if(result.json()['StaffID'] != 'None' and self.staff_checker(result.json()['StaffID']) == 0):
+                    # add the staffID and timestamp kv pair to list
+                    self.staffIDList[result.json()['StaffID']] = time.time()
+                    print("adding staff name to list")
                 else:
                     # user is already in the list therefore skip this event
                     continue
@@ -172,13 +178,13 @@ class PiClient:
                 # be sent later to see if a further alert is needed.
                 
                 # type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
-                if(result.json()['Status'][0] == True and result.json()['Status'][1] == 'luka'):
+                if(result.json()['Status'] == True and result.json()['StaffID'] == 'luka'):
                     self.send_druid_data("entry", self.NODE_ID, "luka", "Nurse", "ICU", "3500", "entry", "not clean")
-##                    self.send_alert("LUKA_W")
+                    self.send_alert("LUKA_W")
                     self.pqueue = queue.PriorityQueue()
-                if(result.json()['Status'][0] == True and result.json()['Status'][1] == 'klaus'):
+                if(result.json()['Status'] == True and result.json()['StaffID'] == 'klaus'):
                     self.send_druid_data("entry", self.NODE_ID, "klaus", "Nurse", "ICU", "3500", "entry", "not clean")
-##                    self.send_alert("KLAUS_W")
+                    self.send_alert("KLAUS_W")
                     self.pqueue = queue.PriorityQueue()
                 
                 # Determine status of person, if there is a staff member face and they are not on dispenser list
@@ -208,22 +214,20 @@ class PiClient:
                 
                 print(result.json())
                 
-                if(result.json()['Status'][0] == True and result.json()['Status'][1] == 'luka'):
-##                    self.send_druid_data("alert", "luka", "nurse", self.NODE_ID, "ICU", "50", "alert", "alert given")
+                if(result.json()['Status'] == True and result.json()['StaffID'] == 'luka'):
                     self.send_druid_data("alert", self.NODE_ID, "luka", "Nurse", "ICU", "3500", "alert", "alert given")
-                elif(result.json()['Status'][0] == True and result.json()['Status'][1] == 'klaus'):
+                    self.send_alert("LUKA_A")
+                elif(result.json()['Status'] == True and result.json()['StaffID'] == 'klaus'):
                     self.send_druid_data("alert", self.NODE_ID, "klaus", "Nurse", "ICU", "3500", "alert", "alert given")
-                elif(result.json()['Status'][0] == False and (result.json()['Status'][1] == 'klaus')):
+                    self.send_alert("KLAUS_A")
+                elif(result.json()['Status'] == False and (result.json()['StaffID'] == 'klaus')):
                     self.send_druid_data("alert", self.NODE_ID, "klaus", "Nurse", "ICU", "3500", "alert", "no alert")
-                elif(result.json()['Status'][0] == False and (result.json()['Status'][1] == 'luka')):
+                    self.send_alert("CLEAN")
+                elif(result.json()['Status'] == False and (result.json()['StaffID'] == 'luka')):
                     self.send_druid_data("alert", self.NODE_ID, "luka", "Nurse", "ICU", "3500", "alert", "no alert")
-##                if(result.json()['Status'][0] == True and result.json()['Status'][1] == 'luka'):
-##                    self.send_alert("LUKA_A")
-##                elif(result.json()['Status'][0] == True and result.json()['Status'][1] == 'klaus'):
-##                    self.send_alert("KLAUS_A")
-##                elif(result.json()['Status'][0] == False and (result.json()['Status'][1] == 'klaus' or result.json()['Status'][1] == 'luka')):
-##                    self.send_alert("CLEAN")
-                    
+                    self.send_alert("CLEAN")
+
+
     # #### MIGHT BE REMOVED IN FUTURE RELEASE ####               
     # Issues arise when a the camera unit takes multiple images of a user at once. This allows multiple alerts to be given for only 1 instance
     # of a breach. To counteract this, this  will constantly look at users that have had pictures taken in the last 30 secounds so that
@@ -232,19 +236,16 @@ class PiClient:
     #          1 if the staffID should not get an alert
     def staff_checker(self, staffID):
         
-        indexOfStaffID = -1
-        
-        try:
-            indexOfStaffID = self.staffIDList.index(staffID)
-        except:
-            # if staffID is not found then return 0 for False not found
+        if(self.staffIDList.get(staffID) == None):
+            # Staff not in list so we are good to give an alert
             return 0
         
-        if(time.time() - self.staffIDList[indexOfStaffID][1] > 30.0):
-            # check timestamps to see if there is at least a 30 sec difference between them 
+        if(time.time() - self.staffIDList.get(staffID) > 30.0):
+            # check timestamps to see if there is at least a 30 sec difference between them
+            # if so, we are good to give an alert
             return 0
         else:
-            # if the time delay is not long enough, disregard this event from getting an alert
+            # if the time delay is not long enough, disregard this event, ther should be NO ALERT
             return 1
         
         
@@ -280,6 +281,31 @@ if __name__ == '__main__':
             
             # Sleep due to sensor delay time
             time.sleep(1)
+            
+            # Check if signal on low delay and take 3 more pictures
+            # Yes I repeat code here but I don't want to make a function for this.
+            if(GPIO.input(11) == 0):
+                
+                for x in range(3):
+                    
+                    # Initial timestamp of image capture
+                    timestamp = time.time()
+                    
+                    # Take a picture, then send that picture to the HTTP thread
+                    img = np.empty((480, 640, 3), dtype=np.uint8)
+                    client.camera.capture(img, 'rgb')
+                  
+                    image_temp = img.astype(np.float64)
+                    image_64 = base64.b64encode(image_temp).decode('ascii')
+                    
+                    client.prepare_and_process(client.NODE_ID, timestamp, image_64, client.shape)
+                    
+                    # Sleep due to sensor delay time
+                    time.sleep(1)
+                    
+                    
+                    
+                
     
     
 
