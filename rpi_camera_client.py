@@ -79,6 +79,8 @@ class PiClient:
         self.LUKA_W = 'aplay -q lukaWelcome.wav'
         self.KLAUS_A = 'aplay -q klausAlert.wav'
         self.KLAUS_W = 'aplay -q klausWelcome.wav'
+        self.KIRK_A = 'aplay -q kirkAlert.wav'
+        self.KIRK_W = 'aplay -q kirkWelcome.wav'
         self.CLEAN = 'aplay -q clean.wav'
 
     # Function to send raw data to druid server
@@ -120,6 +122,10 @@ class PiClient:
             os.system(self.KLAUS_A)
         elif(message == "CLEAN"):
             os.system(self.CLEAN)
+        elif(message == "KIRK_A"):
+            os.system(self.KIRK_A)
+        elif(message == "KIRK_W"):
+            os.system(self.KIRK_W)
         
     # Peeks at head of pqueue.
     # Returns: The timestamp as the key associated with the tuple.
@@ -186,6 +192,10 @@ class PiClient:
                     self.send_druid_data("entry", self.NODE_ID, "klaus", "Nurse", "ICU", "3500", "entry", "not clean")
                     self.send_alert("KLAUS_W")
                     self.pqueue = queue.PriorityQueue()
+                if(result.json()['Status'] == True and result.json()['StaffID'] == 'kirk'):
+                    self.send_druid_data("entry", self.NODE_ID, "kirk", "Nurse", "ICU", "3500", "entry", "not clean")
+                    self.send_alert("KIRK_W")
+                    self.pqueue = queue.PriorityQueue()
                 
                 # Determine status of person, if there is a staff member face and they are not on dispenser list
                 self.msgqueue.put(((timestamp + self.ALERT_TIME_DELAY), payload, headers))
@@ -226,6 +236,12 @@ class PiClient:
                 elif(result.json()['Status'] == False and (result.json()['StaffID'] == 'luka')):
                     self.send_druid_data("alert", self.NODE_ID, "luka", "Nurse", "ICU", "3500", "alert", "no alert")
                     self.send_alert("CLEAN")
+                elif(result.json()['Status'] == False and (result.json()['StaffID'] == 'kirk')):
+                    self.send_druid_data("alert", self.NODE_ID, "kirk", "Nurse", "ICU", "3500", "alert", "no alert")
+                    self.send_alert("CLEAN")
+                elif(result.json()['Status'] == True and result.json()['StaffID'] == 'kirk'):
+                    self.send_druid_data("alert", self.NODE_ID, "kirk", "Nurse", "ICU", "3500", "alert", "alert given")
+                    self.send_alert("KIRK_A")
 
 
     # #### MIGHT BE REMOVED IN FUTURE RELEASE ####               
@@ -261,6 +277,9 @@ if __name__ == '__main__':
     alert_thread.daemon = True
     control_thread.start()
     alert_thread.start()
+    
+    # sensor delay counter
+    senseDelayPic = False
 
     # Main loop for IoT Device 
     while(True):
@@ -282,11 +301,16 @@ if __name__ == '__main__':
             # Sleep due to sensor delay time
             time.sleep(1)
             
-            # Check if signal on low delay and take 3 more pictures
-            # Yes I repeat code here but I don't want to make a function for this.
-            if(GPIO.input(11) == 0):
-                
-                for x in range(3):
+            senseDelayPic = True
+            
+            
+        # Check if signal on low delay and take 3 more pictures
+        # Yes I repeat code here but I don't want to make a function for this.    
+        elif GPIO.input(11) == 0 and senseDelayPic == True:
+            
+            for x in range(3):
+                    
+                    print("taking photo in delay mode")
                     
                     # Initial timestamp of image capture
                     timestamp = time.time()
@@ -303,8 +327,7 @@ if __name__ == '__main__':
                     # Sleep due to sensor delay time
                     time.sleep(1)
                     
-                    
-                    
+            senseDelayPic = False
                 
     
     
