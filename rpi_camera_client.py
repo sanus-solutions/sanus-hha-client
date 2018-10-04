@@ -81,6 +81,8 @@ class PiClient:
         self.KLAUS_W = 'aplay -q klausWelcome.wav'
         self.KIRK_A = 'aplay -q kirkAlert.wav'
         self.KIRK_W = 'aplay -q kirkWelcome.wav'
+        self.SIM_A = 'aplay -q simAlert.wav'
+        self.SIM_W = 'aplay -q simWelcome.wav'
         self.CLEAN = 'aplay -q clean.wav'
 
     # Function to send raw data to druid server
@@ -126,6 +128,10 @@ class PiClient:
             os.system(self.KIRK_A)
         elif(message == "KIRK_W"):
             os.system(self.KIRK_W)
+        elif(message == "SIM_W"):
+            os.system(self.SIM_W)
+        elif(message == "SIM_A"):
+            os.system(self.SIM_A)
         
     # Peeks at head of pqueue.
     # Returns: The timestamp as the key associated with the tuple.
@@ -196,6 +202,10 @@ class PiClient:
                     self.send_druid_data("entry", self.NODE_ID, "kirk", "Nurse", "ICU", "3500", "entry", "not clean")
                     self.send_alert("KIRK_W")
                     self.pqueue = queue.PriorityQueue()
+                if(result.json()['Status'] == True and result.json()['StaffID'] == 'simeon'):
+                    self.send_druid_data("entry", self.NODE_ID, "simeon", "Nurse", "ICU", "3500", "entry", "not clean")
+                    self.send_alert("SIM_W")
+                    self.pqueue = queue.PriorityQueue()
                 
                 # Determine status of person, if there is a staff member face and they are not on dispenser list
                 self.msgqueue.put(((timestamp + self.ALERT_TIME_DELAY), payload, headers))
@@ -242,6 +252,12 @@ class PiClient:
                 elif(result.json()['Status'] == True and result.json()['StaffID'] == 'kirk'):
                     self.send_druid_data("alert", self.NODE_ID, "kirk", "Nurse", "ICU", "3500", "alert", "alert given")
                     self.send_alert("KIRK_A")
+                elif(result.json()['Status'] == False and (result.json()['StaffID'] == 'simeon')):
+                    self.send_druid_data("alert", self.NODE_ID, "simeon", "Nurse", "ICU", "3500", "alert", "no alert")
+                    self.send_alert("CLEAN")
+                elif(result.json()['Status'] == True and result.json()['StaffID'] == 'simeon'):
+                    self.send_druid_data("alert", self.NODE_ID, "simeon", "Nurse", "ICU", "3500", "alert", "alert given")
+                    self.send_alert("SIM_A")
 
 
     # #### MIGHT BE REMOVED IN FUTURE RELEASE ####               
