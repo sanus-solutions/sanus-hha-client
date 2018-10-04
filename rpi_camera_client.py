@@ -42,6 +42,7 @@ class PiClient:
         # msgqueue is for receiving the timestamps and payload for the 2nd post request to check if an alert needs to be sent to the staff member
         self.pqueue = queue.PriorityQueue()
         self.msgqueue = queue.PriorityQueue()
+        self.welcomequeue = queue.Queue()
         
         # StaffID list
         self.staffIDList = {}
@@ -73,17 +74,6 @@ class PiClient:
           
         # Time delay for alert sent in seconds
         self.ALERT_TIME_DELAY = 20
-        
-        # Load in all the audio first
-        self.LUKA_A = 'aplay -q lukaAlert.wav'
-        self.LUKA_W = 'aplay -q lukaWelcome.wav'
-        self.KLAUS_A = 'aplay -q klausAlert.wav'
-        self.KLAUS_W = 'aplay -q klausWelcome.wav'
-        self.KIRK_A = 'aplay -q kirkAlert.wav'
-        self.KIRK_W = 'aplay -q kirkWelcome.wav'
-        self.SIM_A = 'aplay -q simAlert.wav'
-        self.SIM_W = 'aplay -q simWelcome.wav'
-        self.CLEAN = 'aplay -q clean.wav'
 
     # Function to send raw data to druid server
     # Returns: NONE
@@ -110,28 +100,22 @@ class PiClient:
             self.failedEventsList.append(payload)
 
 
+    # Function to play .wav files to welcome staff members.
+    # Returns : NONE
+    def send_welcome(self, name):
+        
+        if name == "clean":
+            os.system("aplay -q cleanA.wav")
+        else:
+            os.system("aplay -q " + name + "W.wav")
+            
+        time.sleep(1)
+    
     # Function to play .wav files to alert staff members.
     # Returns : NONE
-    def send_alert(self,message):
-        
-        if(message == "LUKA_A"):
-            os.system(self.LUKA_A)
-        elif(message == "LUKA_W"):
-            os.system(self.LUKA_W)
-        elif(message == "KLAUS_W"):
-            os.system(self.KLAUS_W)
-        elif(message == "KLAUS_A"):
-            os.system(self.KLAUS_A)
-        elif(message == "CLEAN"):
-            os.system(self.CLEAN)
-        elif(message == "KIRK_A"):
-            os.system(self.KIRK_A)
-        elif(message == "KIRK_W"):
-            os.system(self.KIRK_W)
-        elif(message == "SIM_W"):
-            os.system(self.SIM_W)
-        elif(message == "SIM_A"):
-            os.system(self.SIM_A)
+    def send_alert(self, name):
+        os.system("aplay -q " + name + "A.wav")
+        time.sleep(1)
         
     # Peeks at head of pqueue.
     # Returns: The timestamp as the key associated with the tuple.
@@ -168,52 +152,23 @@ class PiClient:
                 
                 # Dqueue and post request to get face statistics 
                 timestamp, payload, headers = self.pqueue.get()
-                
-                # Send post request to the server
-                result = requests.post(self.url, json=payload, headers=headers)
-                
-                print(result.json())
-                
-                # Check here to see if the staffID has been seen in the last 30 seconds.
-                # If not, add it to pqueue, if yes, stop this task and continue
-                
-                if(result.json()['StaffID'] != 'None' and self.staff_checker(result.json()['StaffID']) == 0):
-                    # add the staffID and timestamp kv pair to list
-                    self.staffIDList[result.json()['StaffID']] = time.time()
-                    print("adding staff name to list")
-                else:
-                    # user is already in the list therefore skip this event
-                    continue
-                
-                # Check the status of the staff member. There will always be a welcome message sent here.
-                # Once the welcome message is sent to the audio device, the payload will be placed in the msqueue to
-                # be sent later to see if a further alert is needed.
-                
-                # type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
-                if(result.json()['Status'] == True and result.json()['StaffID'] == 'luka'):
-                    self.send_druid_data("entry", self.NODE_ID, "luka", "Nurse", "ICU", "3500", "entry", "not clean")
-                    self.send_alert("LUKA_W")
-                    self.pqueue = queue.PriorityQueue()
-                if(result.json()['Status'] == True and result.json()['StaffID'] == 'klaus'):
-                    self.send_druid_data("entry", self.NODE_ID, "klaus", "Nurse", "ICU", "3500", "entry", "not clean")
-                    self.send_alert("KLAUS_W")
-                    self.pqueue = queue.PriorityQueue()
-                if(result.json()['Status'] == True and result.json()['StaffID'] == 'kirk'):
-                    self.send_druid_data("entry", self.NODE_ID, "kirk", "Nurse", "ICU", "3500", "entry", "not clean")
-                    self.send_alert("KIRK_W")
-                    self.pqueue = queue.PriorityQueue()
-                if(result.json()['Status'] == True and result.json()['StaffID'] == 'simeon'):
-                    self.send_druid_data("entry", self.NODE_ID, "simeon", "Nurse", "ICU", "3500", "entry", "not clean")
-                    self.send_alert("SIM_W")
-                    self.pqueue = queue.PriorityQueue()
-                
-                # Determine status of person, if there is a staff member face and they are not on dispenser list
-                self.msgqueue.put(((timestamp + self.ALERT_TIME_DELAY), payload, headers))
+                 
+                # Send post request to http_thread for api call
+                # send to HTTP thread
+                http_thread = threading.Thread(kwargs={'timestamp': timestamp, 'payload': payload, 'headers': headers}, target=client.http_thread)
+                http_thread.daemon = True
+                http_thread.start()
+                        
 
     # Thread that will constantly run on startup and only grab jobs from msgqueue that need to be sent
     # to the server to determine if a second alert needs to be sent to a staff member
     def alert_thread(self):
         while(True):
+            
+            # First check and see if we need to send welcome alerts to anyone into the room
+            if(not self.welcomequeue.empty()):
+                print("sending welcome message")
+                self.send_welcome(self.welcomequeue.get())
             
             # check queue to see if it has passed ALERT_TIME_DELAY secs from current time
             if(self.peek_timestamp_at_alert() == -1):
@@ -234,30 +189,55 @@ class PiClient:
                 
                 print(result.json())
                 
-                if(result.json()['Status'] == True and result.json()['StaffID'] == 'luka'):
-                    self.send_druid_data("alert", self.NODE_ID, "luka", "Nurse", "ICU", "3500", "alert", "alert given")
-                    self.send_alert("LUKA_A")
-                elif(result.json()['Status'] == True and result.json()['StaffID'] == 'klaus'):
-                    self.send_druid_data("alert", self.NODE_ID, "klaus", "Nurse", "ICU", "3500", "alert", "alert given")
-                    self.send_alert("KLAUS_A")
-                elif(result.json()['Status'] == False and (result.json()['StaffID'] == 'klaus')):
-                    self.send_druid_data("alert", self.NODE_ID, "klaus", "Nurse", "ICU", "3500", "alert", "no alert")
-                    self.send_alert("CLEAN")
-                elif(result.json()['Status'] == False and (result.json()['StaffID'] == 'luka')):
-                    self.send_druid_data("alert", self.NODE_ID, "luka", "Nurse", "ICU", "3500", "alert", "no alert")
-                    self.send_alert("CLEAN")
-                elif(result.json()['Status'] == False and (result.json()['StaffID'] == 'kirk')):
-                    self.send_druid_data("alert", self.NODE_ID, "kirk", "Nurse", "ICU", "3500", "alert", "no alert")
-                    self.send_alert("CLEAN")
-                elif(result.json()['Status'] == True and result.json()['StaffID'] == 'kirk'):
-                    self.send_druid_data("alert", self.NODE_ID, "kirk", "Nurse", "ICU", "3500", "alert", "alert given")
-                    self.send_alert("KIRK_A")
-                elif(result.json()['Status'] == False and (result.json()['StaffID'] == 'simeon')):
-                    self.send_druid_data("alert", self.NODE_ID, "simeon", "Nurse", "ICU", "3500", "alert", "no alert")
-                    self.send_alert("CLEAN")
-                elif(result.json()['Status'] == True and result.json()['StaffID'] == 'simeon'):
-                    self.send_druid_data("alert", self.NODE_ID, "simeon", "Nurse", "ICU", "3500", "alert", "alert given")
-                    self.send_alert("SIM_A")
+                
+                ## If we get "Status" = True message then that means that the staff member has breached protocol and not washed
+                ## their hands within the 20 second period. If "Status" = False the staff member is clean and has used a soap dispenser within
+                ## the alloted timeframe
+                
+                if(result.json()['Status'] == True):
+                    self.send_druid_data("alert", self.NODE_ID, result.json()['StaffID'], "Nurse", "ICU", "3500", "alert", "alert given")
+                    self.send_alert(result.json()['StaffID'])
+                elif(result.json()['Status'] == False):
+                    self.send_druid_data("alert", self.NODE_ID, result.json()['StaffID'], "Nurse", "ICU", "3500", "alert", "no alert")
+                    self.send_alert("clean")             
+                    
+    # thread for posting and waiting for HTTP response
+    def http_thread(self, timestamp, payload, headers):
+        
+        # Send post request to the server
+        result = requests.post(self.url, json=payload, headers=headers)
+        
+        print(result.json()['StaffID'])
+        
+        # Return from thread if no face
+        if(result.json()['Status'] == 'no face' or result.json()['StaffID'] == None):
+            return
+
+        # Check here to see if the staffID has been seen in the last 30 seconds.
+        # If not, add it to pqueue, if yes, stop this task and continue
+
+        if(result.json()['StaffID'] != 'None' and self.staff_checker(result.json()['StaffID']) == 0):
+            # add the staffID and timestamp kv pair to list
+            self.staffIDList[result.json()['StaffID']] = time.time()
+            print("adding staff name to list")
+        else:
+            return
+
+        # Check the status of the staff member. There will always be a welcome message sent here.
+        # Once the welcome message is sent to the audio device, the payload will be placed in the msqueue to
+        # be sent later to see if a further alert is needed.
+
+        # Druid data schema : type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
+        if(result.json()['Status'] == True):
+            self.send_druid_data("entry", self.NODE_ID, result.json()['StaffID'], "Nurse", "ICU", "3500", "entry", "not clean")
+            self.welcomequeue.put(result.json()['StaffID'])
+        elif(result.json()['Status'] == False):
+            self.send_druid_data("entry", self.NODE_ID, result.json()['StaffID'], "Nurse", "ICU", "3500", "entry", "clean")
+            self.welcomequeue.put(result.json()['StaffID'])
+            return
+
+        # Determine status of person, if there is a staff member face and they are not on dispenser list
+        self.msgqueue.put(((timestamp + self.ALERT_TIME_DELAY), payload, headers))
 
 
     # #### MIGHT BE REMOVED IN FUTURE RELEASE ####               
