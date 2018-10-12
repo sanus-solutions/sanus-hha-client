@@ -95,6 +95,14 @@ class PiClient:
         try:
             result = requests.post(self.postData, json=payload, headers=self.DRUID_SERVER_HEADERS)
             print(result.json())
+            
+            # If druid connection is healthy, then check if there are any failedEvents to send up as well
+            if(len(self.failedEventsList) > 0):
+                print("sending failed event to druid")
+                for event in self.failedEventsList:
+                    result = requests.post(self.postData, json=event, headers=self.DRUID_SERVER_HEADERS)
+                self.failedEventsList.clear()
+            
         except:
             # Save the result for later
             self.failedEventsList.append(payload)
@@ -167,7 +175,6 @@ class PiClient:
             
             # First check and see if we need to send welcome alerts to anyone into the room
             if(not self.welcomequeue.empty()):
-                print("sending welcome message")
                 self.send_welcome(self.welcomequeue.get())
             
             # check queue to see if it has passed ALERT_TIME_DELAY secs from current time
@@ -182,7 +189,13 @@ class PiClient:
                 # Send second post request again and check result.
                 # If there is a face, and it is staff, and they are still not in the dispenser list, send an alert
                 payload["Timestamp"] = time.time()
-                result = requests.post(self.url, json=payload, headers=headers)
+                
+                result = None
+                try:
+                    result = requests.post(self.url, json=payload, headers=headers)
+                except:
+                    print("Tensorflow server unreachable, will save alert for later")
+                    continue
 
                 # When the server returns STATUS and NAME of staff member.
                 # Send an alert accordingly.
@@ -204,10 +217,16 @@ class PiClient:
     # thread for posting and waiting for HTTP response
     def http_thread(self, timestamp, payload, headers):
         
-        # Send post request to the server
-        result = requests.post(self.url, json=payload, headers=headers)
+        result = None
         
-        print(result.json()['StaffID'])
+        # Send post request to the server
+        try:
+            result = requests.post(self.url, json=payload, headers=headers)
+            print(result.json()['StaffID'])
+        except:
+            print("Cannot connect to server - dropping image")
+            return
+            
         
         # Return from thread if no face
         if(result.json()['Status'] == 'no face' or result.json()['StaffID'] == None):
