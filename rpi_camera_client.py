@@ -12,6 +12,7 @@ from PIL import Image
 import base64
 import numpy as np
 import datetime
+import boto3
 
 """
 	Class to encapsulate the Raspberry Pi IoT device that will be attached to the doorways of hospital patient rooms. 
@@ -55,7 +56,7 @@ class PiClient:
         self.image = np.empty((480, 640, 3), dtype=np.uint8)
         
         # Server info
-        SERVER_HOST = '192.168.0.106'
+        SERVER_HOST = '192.168.0.103'
         SERVER_PORT = '5000'
         
         # API URL       THE SERVER HOST AND PORT WILL BE IN CONFIG FILE LATER
@@ -74,6 +75,15 @@ class PiClient:
           
         # Time delay for alert sent in seconds
         self.ALERT_TIME_DELAY = 20
+
+        self.sns = boto3.client('sns', aws_access_key_id='AKIAIL7SBOJ2DA3ONVKQ',
+            aws_secret_access_key='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',
+            region_name='us-east-1'
+            )
+        self.phone_book = {'klaus':'1-404-632-3234', 
+            'luka':'1-678-524-6213',
+            'billy':'1-404-697-3073',
+            'sally': '1-404-242-9547'}
 
     # Function to send raw data to druid server
     # Returns: NONE
@@ -210,6 +220,10 @@ class PiClient:
                 if(result.json()['Status'] == True):
                     self.send_druid_data("alert", self.NODE_ID, result.json()['StaffID'], "Nurse", "ICU", "3500", "alert", "alert given")
                     self.send_alert(result.json()['StaffID'])
+                    print('person not in sanitizer list', self.sns.publish(
+                         PhoneNumber=self.phone_book[result.json()['StaffID']],
+                         Message="Sanus Solutions Alert:" + result.json()['StaffID'] + ", You forgot to wash your hands in Patient Room 25",
+                    ))
                 elif(result.json()['Status'] == False):
                     self.send_druid_data("alert", self.NODE_ID, result.json()['StaffID'], "Nurse", "ICU", "3500", "alert", "no alert")
                     self.send_alert("clean")             

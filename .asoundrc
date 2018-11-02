@@ -1,0 +1,12 @@
+pcm.!default {
+  type asym
+  playback.pcm "speaker"
+}
+
+pcm.speaker {
+  type plug
+  slave {
+    pcm "hw:1,0"
+  }
+}
+
