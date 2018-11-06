@@ -1,0 +1,6 @@
+db.test.insert({type: "staff", staffID: "luka", staff_title: "nurse"})
+db.test.insert({type: "staff", staffID: "klaus", staff_title: "nurse"})
+db.test.insert({type: "staff", staffID: "simeon", staff_title: "nurse"})
+db.test.insert({type: "staff", staffID: "kirk", staff_title: "nurse"})
+
+db.test.insert({type: "node", nodeID: "demo_entry", unit: "ICU", room_number: "3500"})

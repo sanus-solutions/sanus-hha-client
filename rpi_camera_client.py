@@ -15,6 +15,7 @@ import datetime
 import boto3
 import aiohttp
 import asyncio
+import pymongo
 
 """
 	Class to encapsulate the Raspberry Pi IoT device that will be attached to the doorways of hospital patient rooms.
@@ -87,6 +88,9 @@ class PiClient:
             'luka':'1-678-524-6213',
             'billy':'1-404-697-3073',
             'sally': '1-404-242-9547'}
+
+        # MongoDB
+        self.client = pymongo.MongoClient('mongodb://sanus:PiA6M4I0vcTU@ec2-54-224-191-119.compute-1.amazonaws.com:27017/')
 
     # Function to send raw data to druid server
     # Returns: NONE
@@ -199,12 +203,17 @@ class PiClient:
         # Once the welcome message is sent to the audio device, the payload will be placed in the msqueue to
         # be sent later to see if a further alert is needed.
 
+        # Get data from MongoDB on that staff member
+        collection = client.hospital.test
+        staffDoc = collection.find_one({"staffID": result['StaffID'] })
+        nodDoc = collection.find_one({"nodeID": self.NODE_ID })
+
         # Druid data schema : type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
         if(result['Status'] == True):
-            self.send_druid_data("entry", self.NODE_ID, result['StaffID'], "Nurse", "ICU", "3500", "entry", "not clean")
+            self.send_druid_data("entry", nodDoc["nodeID"], staffDoc["staffID"], staffDoc["staff_title"], nodDoc["unit"], nodDoc["room_number"], "entry", "not clean")
             self.welcomequeue.put(result['StaffID'])
         elif(result['Status'] == False):
-            self.send_druid_data("entry", self.NODE_ID, result['StaffID'], "Nurse", "ICU", "3500", "entry", "clean")
+            self.send_druid_data("entry", nodDoc["nodeID"], staffDoc["staffID"], staffDoc["staff_title"], nodDoc["unit"], nodDoc["room_number"], "entry", "clean")
             self.welcomequeue.put(result['StaffID'])
             return
 
@@ -262,19 +271,24 @@ class PiClient:
                 print(result.json())
 
 
+                # MongoDB
+                collection = client.hospital.test
+                staffDoc = collection.find_one({"staffID": result['StaffID'] })
+                nodDoc = collection.find_one({"nodeID": self.NODE_ID })
+
                 ## If we get "Status" = True message then that means that the staff member has breached protocol and not washed
                 ## their hands within the 20 second period. If "Status" = False the staff member is clean and has used a soap dispenser within
                 ## the alloted timeframe
 
                 if(result.json()['Status'] == True):
-                    self.send_druid_data("alert", self.NODE_ID, result.json()['StaffID'], "Nurse", "ICU", "3500", "alert", "alert given")
-                    self.send_alert(result.json()['StaffID'])
+                    self.send_druid_data("alert", nodDoc["nodeID"], staffDoc['staffID'], staffDoc['staff_title'], nodDoc["unit"], nodDoc["room_number"], "alert", "alert given")
+                    self.send_alert(staffDoc['staffID'])
                     print('person not in sanitizer list', self.sns.publish(
-                         PhoneNumber=self.phone_book[result.json()['StaffID']],
-                         Message="Sanus Solutions Alert:" + result.json()['StaffID'] + ", You forgot to wash your hands in Patient Room 25",
+                         PhoneNumber=self.phone_book[staffDoc['staffID']],
+                         Message="Sanus Solutions Alert:" + staffDoc['staffID'] + ", You forgot to wash your hands in Patient Room 25",
                     ))
                 elif(result.json()['Status'] == False):
-                    self.send_druid_data("alert", self.NODE_ID, result.json()['StaffID'], "Nurse", "ICU", "3500", "alert", "no alert")
+                    self.send_druid_data("alert", nodDoc["nodeID"], staffDoc['staffID'], staffDoc['staff_title'], nodDoc["unit"], nodDoc["room_number"], "alert", "no alert")
                     self.send_alert("clean")
 
 
