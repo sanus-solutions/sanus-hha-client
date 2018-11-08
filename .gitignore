@@ -2,3 +2,7 @@
 ###################
 
 *.pyc
+
+# Folders #
+
+/sanus_cloud_services

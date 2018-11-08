@@ -16,6 +16,7 @@ import boto3
 import aiohttp
 import asyncio
 import pymongo
+from sanus_cloud_services import CloudServices
 
 """
 	Class to encapsulate the Raspberry Pi IoT device that will be attached to the doorways of hospital patient rooms.
@@ -66,7 +67,7 @@ class PiClient:
         self.url = 'http://' + SERVER_HOST + ':' + SERVER_PORT + '/sanushost/api/v1.0/entry_img'
 
         # Druid Server
-        DRUID_SERVER_HOST = '192.168.0.105'
+        DRUID_SERVER_HOST = '192.168.0.107'
         DRUID_SERVER_PORT_DATA = '8200'
         DRUID_SERVER_PORT_QUERY = '8082'
         self.DRUID_SERVER_HEADERS = {'Content_Type': 'application/json'}
@@ -79,15 +80,9 @@ class PiClient:
         # Time delay for alert sent in seconds
         self.ALERT_TIME_DELAY = 20
 
-        # Amazon Web Services - Simple Message Service
-        self.sns = boto3.client('sns', aws_access_key_id='AKIAIL7SBOJ2DA3ONVKQ',
-            aws_secret_access_key='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',
-            region_name='us-east-1'
-            )
-        self.phone_book = {'klaus':'1-404-632-3234',
-            'luka':'1-678-524-6213',
-            'billy':'1-404-697-3073',
-            'sally': '1-404-242-9547'}
+        # CloudServices
+
+        self.cloudServices = CloudServices.CloudServices()
 
         # MongoDB
         self.client = pymongo.MongoClient('mongodb://sanus:PiA6M4I0vcTU@ec2-54-224-191-119.compute-1.amazonaws.com:27017/')
@@ -204,7 +199,7 @@ class PiClient:
         # be sent later to see if a further alert is needed.
 
         # Get data from MongoDB on that staff member
-        collection = client.hospital.test
+        collection = self.client.hospital.test
         staffDoc = collection.find_one({"staffID": result['StaffID'] })
         nodDoc = collection.find_one({"nodeID": self.NODE_ID })
 
@@ -268,11 +263,10 @@ class PiClient:
                 # When the server returns STATUS and NAME of staff member.
                 # Send an alert accordingly.
 
-                print(result.json())
-
+                result = result.json()
 
                 # MongoDB
-                collection = client.hospital.test
+                collection = self.client.hospital.test
                 staffDoc = collection.find_one({"staffID": result['StaffID'] })
                 nodDoc = collection.find_one({"nodeID": self.NODE_ID })
 
@@ -280,14 +274,14 @@ class PiClient:
                 ## their hands within the 20 second period. If "Status" = False the staff member is clean and has used a soap dispenser within
                 ## the alloted timeframe
 
-                if(result.json()['Status'] == True):
+                if(result['Status'] == True):
                     self.send_druid_data("alert", nodDoc["nodeID"], staffDoc['staffID'], staffDoc['staff_title'], nodDoc["unit"], nodDoc["room_number"], "alert", "alert given")
                     self.send_alert(staffDoc['staffID'])
-                    print('person not in sanitizer list', self.sns.publish(
-                         PhoneNumber=self.phone_book[staffDoc['staffID']],
-                         Message="Sanus Solutions Alert:" + staffDoc['staffID'] + ", You forgot to wash your hands in Patient Room 25",
-                    ))
-                elif(result.json()['Status'] == False):
+
+                    # Send SMS to staff member from AWS
+                    self.cloudServices.simple_notification_service(staffDoc["phone_num"], staffDoc['staffID'].capitalize() + ", you forgot to wash your hands, please do so.")
+
+                elif(result['Status'] == False):
                     self.send_druid_data("alert", nodDoc["nodeID"], staffDoc['staffID'], staffDoc['staff_title'], nodDoc["unit"], nodDoc["room_number"], "alert", "no alert")
                     self.send_alert("clean")
 
