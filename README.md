@@ -5,7 +5,8 @@
 
 Sound Files
 * alsa.conf - make sure defaults are 0
-* ~/.asoundrc 
+* ~/.asoundrc
+* make sure you make proper sound card selection
 
 Make sure that the .asoundrc file looks like this.
 
