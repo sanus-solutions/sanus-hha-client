@@ -6,7 +6,8 @@
 Sound Files
 * alsa.conf - make sure defaults are 0
 * ~/.asoundrc
-* make sure you make proper sound card selection
+* Make sure you make proper sound card selection
+* Change `alsamixer` to have 100% volume if it sounds low
 
 Make sure that the .asoundrc file looks like this.
 
