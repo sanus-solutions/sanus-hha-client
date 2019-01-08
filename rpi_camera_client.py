@@ -13,7 +13,7 @@ import base64
 import numpy as np
 import datetime
 import boto3
-from sanus_cloud_services import CloudServices
+# from sanus_cloud_services import CloudServices
 
 """
     Class to encapsulate the Raspberry Pi IoT device that will be attached to the doorways of hospital patient rooms. 
@@ -57,7 +57,7 @@ class PiClient:
         self.image = np.empty((480, 640, 3), dtype=np.uint8)
         
         # Server info
-        SERVER_HOST = '192.168.0.103'
+        SERVER_HOST = '192.168.0.105'
         SERVER_PORT = '5000'
         
         # API URL       THE SERVER HOST AND PORT WILL BE IN CONFIG FILE LATER
@@ -75,10 +75,10 @@ class PiClient:
         
           
         # Time delay for alert sent in seconds
-        self.ALERT_TIME_DELAY = 20
+        self.ALERT_TIME_DELAY = 30
 
         # CloudServices
-        self.cloudServices = CloudServices.CloudServices()
+        # self.cloudServices = CloudServices.CloudServices()
 
     # Function to send raw data to druid server
     # Returns: NONE
@@ -127,7 +127,11 @@ class PiClient:
     # Function to play .wav files to alert staff members.
     # Returns : NONE
     def send_alert(self, name):
-        os.system("aplay -q alertStaff.wav")
+
+        if name == "clean":
+            os.system("aplay -q thankyou.wav")
+        else:
+            os.system("aplay -q alertStaff.wav")
         time.sleep(1)
         
     # Peeks at head of pqueue.
@@ -212,16 +216,15 @@ class PiClient:
                 ## their hands within the 20 second period. If "Status" = False the staff member is clean and has used a soap dispenser within
                 ## the alloted timeframe
                 
-                if(result['Status'] == True):
-                    self.send_druid_data("Alert", self.NODE_ID, result['StaffID'], "Nurse", "ICU", "25", "Alert", "Alert given")
-                    self.send_alert(result['StaffID'])
-                    
+                if(result['Status'] == True): 
+                    self.send_druid_data("Alert", self.NODE_ID, result['StaffID'], "Nurse", "ICU", "25", "Alert", "No alert")
+                    self.send_alert("clean") 
                     # Send SMS to staff member from AWS (NOT FOR LOCAL DEMOS)
 
 
                 elif(result['Status'] == False):
-                    self.send_druid_data("Alert", self.NODE_ID, result['StaffID'], "Nurse", "ICU", "25", "Alert", "No alert")
-                    self.send_alert("clean")             
+                    self.send_druid_data("Alert", self.NODE_ID, result['StaffID'], "Nurse", "ICU", "25", "Alert", "Alert given")
+                    self.send_alert(result['StaffID'])   
                     
     # thread for posting and waiting for HTTP response
     def http_thread(self, timestamp, payload, headers):
@@ -232,7 +235,6 @@ class PiClient:
         try:
             result = requests.post(self.url, json=payload, headers=headers)
             result = result.json()
-            print(result['StaffID'])
         except:
             print("Cannot connect to server - dropping image")
             return
@@ -256,11 +258,15 @@ class PiClient:
         # Once the welcome message is sent to the audio device, the payload will be placed in the msqueue to
         # be sent later to see if a further alert is needed.
 
+
+        print("The person who walked in is: " + result['StaffID'] + "are they clean? - " + str(result['Status']) )
+
         # Druid data schema : type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
-        if(result['Status'] == True):
+        if(result['Status'] == False):
             self.send_druid_data("Entry", self.NODE_ID, result['StaffID'], "Nurse", "ICU", "25", "Entry", "Not clean")
             self.welcomequeue.put(result['StaffID'])
-        elif(result['Status'] == False):
+        
+        elif(result['Status'] == True):
             self.send_druid_data("Entry", self.NODE_ID, result['StaffID'], "Nurse", "ICU", "25", "Entry", "Clean")
             self.welcomequeue.put(result['StaffID'])
             return
