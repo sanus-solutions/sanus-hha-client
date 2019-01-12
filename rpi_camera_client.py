@@ -13,8 +13,8 @@ import base64
 import numpy as np
 import datetime
 import boto3
-import aiohttp
-import asyncio
+import pymongo
+from sanus_cloud_services import CloudServices
 
 """
 	Class to encapsulate the Raspberry Pi IoT device that will be attached to the doorways of hospital patient rooms.
@@ -58,14 +58,14 @@ class PiClient:
         self.image = np.empty((480, 640, 3), dtype=np.uint8)
 
         # Server info
-        SERVER_HOST = '192.168.0.103'
+        SERVER_HOST = '192.168.0.105'
         SERVER_PORT = '5000'
 
         # API URL       THE SERVER HOST AND PORT WILL BE IN CONFIG FILE LATER
         self.url = 'http://' + SERVER_HOST + ':' + SERVER_PORT + '/sanushost/api/v1.0/entry_img'
 
         # Druid Server
-        DRUID_SERVER_HOST = '192.168.0.105'
+        DRUID_SERVER_HOST = '192.168.0.107'
         DRUID_SERVER_PORT_DATA = '8200'
         DRUID_SERVER_PORT_QUERY = '8082'
         self.DRUID_SERVER_HEADERS = {'Content_Type': 'application/json'}
@@ -78,15 +78,28 @@ class PiClient:
         # Time delay for alert sent in seconds
         self.ALERT_TIME_DELAY = 20
 
-        # Amazon Web Services - Simple Message Service
-        self.sns = boto3.client('sns', aws_access_key_id='AKIAIL7SBOJ2DA3ONVKQ',
-            aws_secret_access_key='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',
-            region_name='us-east-1'
-            )
-        self.phone_book = {'klaus':'1-404-632-3234',
-            'luka':'1-678-524-6213',
-            'billy':'1-404-697-3073',
-            'sally': '1-404-242-9547'}
+        # Cloud Services
+        self.cloudServices = CloudServices.CloudServices()
+
+        # MongoDB
+        self.mongo = pymongo.MongoClient('mongodb://sanus:PiA6M4I0vcTU@ec2-54-224-191-119.compute-1.amazonaws.com:27017/')
+        
+
+    # Function to take image from the camera and then sends it to be processed
+    # Input: None
+    # Returns: None
+    def captureImage(self, client):
+        # Initial timestamp of image capture
+        timestamp = time.time()
+
+        # Take a picture, then send that picture to the HTTP thread
+        img = np.empty((480, 640, 3), dtype=np.uint8)
+        client.camera.capture(img, 'rgb')
+
+        image_temp = img.astype(np.float64)
+        image_64 = base64.b64encode(image_temp).decode('ascii')
+
+        client.prepare_and_process(client.NODE_ID, timestamp, image_64, client.shape)
 
     # Function to send raw data to druid server
     # Returns: NONE
@@ -164,34 +177,33 @@ class PiClient:
         # the timestamp, payload, and header will be saved so that we can make another post request to determine HH status
         client.pqueue.put((timestamp, payload, headers))
 
-    # Async call to tensorflow server
-    async def http_request(self,session):
+    # Thread that is created once a request is to be sent and then deleted after that request
+    def http_thread(self, timestamp, payload, headers):
 
-        # Dqueue and post request to get face statistics
-        timestamp, payload, headers = self.pqueue.get()
-
+        # Init request variable for responses
         result = None
 
         # Send post request to the server
         try:
-            async with session.post(self.url, json=payload) as resp:
-                result = await resp.json(content_type=None)
-        except:
-            print("Cannot connect to server - dropping image")
+            result = requests.post(self.url, json=payload, headers=headers)
+            result = result.json()
+        except Exception as e:
+            print(e)
             return
 
 
-        # Return from thread if no face
+        # If no face was found on Recognition or TF server, then get out of this thread and drop
+        # the images.
         if(result['Status'] == 'no face' or result['StaffID'] == None):
             return
 
-        # Check here to see if the staffID has been seen in the last 30 seconds.
-        # If not, add it to pqueue, if yes, stop this task and continue
-
+        # Check here to see if the staffID has been seen in the last 30 seconds (to mitigate
+        # multiple alerts given out)
+        # If the staffID has NOT been seen, add it to pqueue, if it has YES, then stop this task and continue
         if(result['StaffID'] != 'None' and self.staff_checker(result['StaffID']) == 0):
             # add the staffID and timestamp kv pair to list
             self.staffIDList[result['StaffID']] = time.time()
-            print("adding staff name to list")
+            print("adding staff name to 'seen' list")
         else:
             return
 
@@ -199,32 +211,39 @@ class PiClient:
         # Once the welcome message is sent to the audio device, the payload will be placed in the msqueue to
         # be sent later to see if a further alert is needed.
 
-        # Druid data schema : type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
-        if(result['Status'] == True):
-            self.send_druid_data("entry", self.NODE_ID, result['StaffID'], "Nurse", "ICU", "3500", "entry", "not clean")
+        # Get data from MongoDB on that particular staff member
+        collection = self.mongo.hospital.test
+        staffDoc = collection.find_one({"staffID": result['StaffID'] })
+        nodDoc = collection.find_one({"nodeID": self.NODE_ID })
+
+         # Druid data schema : type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
+        if(result['Status'] == False):
+            self.send_druid_data("Entry", nodDoc["nodeID"], staffDoc["staffID"], staffDoc["staff_title"], nodDoc["unit"], nodDoc["room_number"], "Entry", "Not clean")
             self.welcomequeue.put(result['StaffID'])
-        elif(result['Status'] == False):
-            self.send_druid_data("entry", self.NODE_ID, result['StaffID'], "Nurse", "ICU", "3500", "entry", "clean")
+        elif(result['Status'] == True):
+            self.send_druid_data("Entry", nodDoc["nodeID"], staffDoc["staffID"], staffDoc["staff_title"], nodDoc["unit"], nodDoc["room_number"], "Entry", "Clean")
             self.welcomequeue.put(result['StaffID'])
             return
 
-        # Determine status of person, if there is a staff member face and they are not on dispenser list
+        # Determine the hygiene status of the staff member, if there is a staff member face and they are not on dispenser list
         self.msgqueue.put(((timestamp + self.ALERT_TIME_DELAY), payload, headers))
 
-    # Async loop for ClientSession
-    async def http_loop(self):
-        async with aiohttp.ClientSession() as session:
-            while(True):
-                if(not self.pqueue.empty()):
-                    await self.http_request(session)
 
     # Thread that will run in a loop that will constantly check in the pqueue for any payloads that need to be processed and sent to the server
     def control_thread(self): # always running on startup
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        asyncio.ensure_future(self.http_loop())
-        loop.run_forever()
+        while(True):
+
+            if(not self.pqueue.empty()):
+                
+                # Dequeue to get the first preprocessed image
+                timestamp, payload, headers = self.pqueue.get()
+                 
+                # Create an HTTP thread for just this request
+                # send to HTTP thread
+                http_thread = threading.Thread(kwargs={'timestamp': timestamp, 'payload': payload, 'headers': headers}, target=client.http_thread)
+                http_thread.daemon = True
+                http_thread.start()
 
 
     # Thread that will constantly run on startup and only grab jobs from msgqueue that need to be sent
@@ -232,11 +251,13 @@ class PiClient:
     def alert_thread(self):
         while(True):
 
-            # First check and see if we need to send welcome alerts to anyone into the room
+            # First check and see if we need to send welcome alerts to anyone who came into the room
             if(not self.welcomequeue.empty()):
                 self.send_welcome(self.welcomequeue.get())
 
-            # check queue to see if it has passed ALERT_TIME_DELAY secs from current time
+            # Check queue to see if it has passed ALERT_TIME_DELAY secs from current time.
+            # We should only alert when this time threshold has passed to give the staff member
+            # time to conduct hand hygiene.
             if(self.peek_timestamp_at_alert() == -1):
                 continue
             elif(self.peek_timestamp_at_alert() - time.time() <= 0.0):
@@ -245,8 +266,9 @@ class PiClient:
                 # Now that 30 sec have past, we need to check and see if they have actually washed their hands in that time-frame
                 timestamp, payload, headers = self.msgqueue.get()
 
-                # Send second post request again and check result.
-                # If there is a face, and it is staff, and they are still not in the dispenser list, send an alert
+                # Send second post request again and check result (see if staff member has
+                # used a hand hygiene device yet.)
+                # If there is a face, and it is staff, and they are still not in the dispenser list, send an alert to them
                 payload["Timestamp"] = time.time()
 
                 result = None
@@ -258,23 +280,28 @@ class PiClient:
 
                 # When the server returns STATUS and NAME of staff member.
                 # Send an alert accordingly.
+                result = result.json()
+                print(result)
 
-                print(result.json())
+                # MongoDB
+                collection = self.mongo.hospital.test
+                staffDoc = collection.find_one({"staffID": result['StaffID'] })
+                nodDoc = collection.find_one({"nodeID": self.NODE_ID })
 
 
                 ## If we get "Status" = True message then that means that the staff member has breached protocol and not washed
                 ## their hands within the 20 second period. If "Status" = False the staff member is clean and has used a soap dispenser within
                 ## the alloted timeframe
 
-                if(result.json()['Status'] == True):
-                    self.send_druid_data("alert", self.NODE_ID, result.json()['StaffID'], "Nurse", "ICU", "3500", "alert", "alert given")
-                    self.send_alert(result.json()['StaffID'])
-                    print('person not in sanitizer list', self.sns.publish(
-                         PhoneNumber=self.phone_book[result.json()['StaffID']],
-                         Message="Sanus Solutions Alert:" + result.json()['StaffID'] + ", You forgot to wash your hands in Patient Room 25",
-                    ))
-                elif(result.json()['Status'] == False):
-                    self.send_druid_data("alert", self.NODE_ID, result.json()['StaffID'], "Nurse", "ICU", "3500", "alert", "no alert")
+                if(result['Status'] == False):
+                    self.send_druid_data("Alert", nodDoc["nodeID"], staffDoc['staffID'], staffDoc['staff_title'], nodDoc["unit"], nodDoc["room_number"], "Alert", "Alert given")
+                    self.send_alert(staffDoc['staffID'])
+
+                    # Send SMS to staff member from AWS
+                    self.cloudServices.simple_notification_service(staffDoc["phone_num"], staffDoc['staffID'].capitalize() + ", you forgot to wash your hands, please do so.")
+                    
+                elif(result.json()['Status'] == True):
+                    self.send_druid_data("Alert", nodDoc["nodeID"], staffDoc['staffID'], staffDoc['staff_title'], nodDoc["unit"], nodDoc["room_number"], "Alert", "No alert")
                     self.send_alert("clean")
 
 
@@ -295,7 +322,7 @@ class PiClient:
             # if so, we are good to give an alert
             return 0
         else:
-            # if the time delay is not long enough, disregard this event, ther should be NO ALERT
+            # if the time delay is not long enough, disregard this event as there should be NO ALERT
             return 1
 
 
@@ -304,7 +331,7 @@ class PiClient:
 if __name__ == '__main__':
     client = PiClient()
 
-    # Initiate threads
+    # Create/Initiate threads
     control_thread = threading.Thread(name='control_thread', target=client.control_thread)
     alert_thread = threading.Thread(name='alert_thread', target=client.alert_thread)
     control_thread.daemon = True
@@ -313,52 +340,32 @@ if __name__ == '__main__':
     alert_thread.start()
 
     # sensor delay counter
-    senseDelayPic = False
+    isSensorInDelayMode = False
 
     # Main loop for IoT Device
     while(True):
 
         if GPIO.input(11): # If the PIR sensor is giving a HIGH signal
 
-            # Initial timestamp of image capture
-            timestamp = time.time()
-
-            # Take a picture, then send that picture to the HTTP thread
-            img = np.empty((480, 640, 3), dtype=np.uint8)
-            client.camera.capture(img, 'rgb')
-
-            image_temp = img.astype(np.float64)
-            image_64 = base64.b64encode(image_temp).decode('ascii')
-
-            client.prepare_and_process(client.NODE_ID, timestamp, image_64, client.shape)
+            client.captureImage(client)
 
             # Sleep due to sensor delay time
-            time.sleep(1)
+            time.sleep(0.5)
 
-            senseDelayPic = True
+            isSensorInDelayMode = True
 
 
         # Check if signal on low delay and take 3 more pictures
         # Yes I repeat code here - will make function for this later.
-        elif GPIO.input(11) == 0 and senseDelayPic == True:
+        elif GPIO.input(11) == 0 and isSensorInDelayMode == True:
 
             for x in range(3):
 
                     print("taking photo in delay mode")
 
-                    # Initial timestamp of image capture
-                    timestamp = time.time()
+                    client.captureImage(client)
 
-                    # Take a picture, then send that picture to the HTTP thread
-                    img = np.empty((480, 640, 3), dtype=np.uint8)
-                    client.camera.capture(img, 'rgb')
-
-                    image_temp = img.astype(np.float64)
-                    image_64 = base64.b64encode(image_temp).decode('ascii')
-
-                    client.prepare_and_process(client.NODE_ID, timestamp, image_64, client.shape)
-
-                    # Sleep due to sensor delay time
+                    # Take 1 photo every second for 3 seconds in delay mode
                     time.sleep(1)
 
-            senseDelayPic = False
+            isSensorInDelayMode = False
