@@ -46,10 +46,10 @@ class PiClient:
         # Cloud Services
         MONGO_STRING = config['CLOUDSERVER']['MongoClient']
         # Camera
-        CAMERA_WIDTH = config['CAMERA']['Width']
-        CAMERA_HEIGHT = config['CAMERA']['Height']
-        CAMERA_CHANNELS = config['CAMERA']['Channels']
-        CAMERA_SHAPE = config['CAMERA']['Shape']
+        self.CAMERA_WIDTH = int(config['CAMERA']['Width'])
+        self.CAMERA_HEIGHT = int(config['CAMERA']['Height'])
+        self.CAMERA_CHANNELS = int(config['CAMERA']['Channels'])
+        self.CAMERA_SHAPE = config['CAMERA']['Shape']
 
 
         ### END CONFIG ###
@@ -63,7 +63,7 @@ class PiClient:
 
         # Camera Init
         self.camera = picamera.PiCamera()
-        self.camera.resolution = (640, 480)
+        self.camera.resolution = (self.CAMERA_WIDTH, self.CAMERA_HEIGHT)
         self.camera.start_preview(fullscreen=False, window=(100, 20, 0, 0))
         time.sleep(2)
 
@@ -81,15 +81,15 @@ class PiClient:
         self.failedEventsList = []
 
         # Image place holders
-        self.shape = CAMERA_SHAPE
-        self.image = np.empty(( int(CAMERA_HEIGHT), int(CAMERA_WIDTH), int(CAMERA_CHANNELS) ), dtype=np.uint8)
+        self.shape = self.CAMERA_SHAPE
+        self.image = np.empty(( int(self.CAMERA_HEIGHT), int(self.CAMERA_WIDTH), int(self.CAMERA_CHANNELS) ), dtype=np.uint8)
 
         # API URLs
         self.postEntryImg = 'http://' + SERVER_HOST + ':' + SERVER_PORT + API_PostEntryImg
 
         # API Druid
-        self.postData = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_DATA + '/v1/post/hospital'
-        self.postQuery = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_QUERY + '/druid/v2?pretty'
+        self.postData = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_DATA + API_PostDruidData
+        self.postQuery = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_QUERY + API_PostDruidQuery
 
         # Cloud Services
         self.cloudServices = CloudServices.CloudServices()
@@ -106,7 +106,7 @@ class PiClient:
         timestamp = time.time()
 
         # Take a picture, then send that picture to the HTTP thread
-        img = np.empty((480, 640, 3), dtype=np.uint8)
+        img = np.empty(( self.CAMERA_HEIGHT, self.CAMERA_WIDTH, self.CAMERA_CHANNELS), dtype=np.uint8)
         client.camera.capture(img, 'rgb')
 
         image_temp = img.astype(np.float64)
