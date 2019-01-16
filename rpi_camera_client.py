@@ -1,6 +1,5 @@
 """
     Author: Luka Antolic-Soban
-
 """
 import RPi.GPIO as GPIO
 import time
@@ -14,6 +13,7 @@ import numpy as np
 import datetime
 import boto3
 import pymongo
+import configparser
 from sanus_cloud_services import CloudServices
 
 """
@@ -22,12 +22,39 @@ from sanus_cloud_services import CloudServices
 class PiClient:
 
     def __init__(self):
-        # TODO: set location in environment variable
-        # get location/deviceID from envvar and init with client type
-        #self.ctype = os.environ['CLIENT_TYPE']
-        self.CTENTRY = "ENTRY"
-        #self.node_id = os.environ['LOCATION']
-        self.NODE_ID = "demo_entry" #this will change once we place a random gen here
+
+        config = configparser.ConfigParser()
+        config.read('config.ini')
+        
+        ### Initialize config values
+        self.ClientType = config['PROPERTIES']['ClientType']
+        self.NODE_ID = config['PROPERTIES']['NodeID']
+        # Time delay for alert sent in seconds
+        self.ALERT_TIME_DELAY = config['PROPERTIES']['AlertTimeDelay']
+        # Server info
+        SERVER_HOST = config['LOCALSERVER']['ServerHost']
+        SERVER_PORT = config['LOCALSERVER']['ServerPort']
+        # API Endpoints
+        API_PostEntryImg = config['LOCALSERVER']['API_EntryImg']
+        API_PostDruidData = config['DRUID']['API_PostDruidData']
+        API_PostDruidQuery = config['DRUID']['API_PostDruidQuery']
+        # Druid
+        DRUID_SERVER_HOST = config['DRUID']['DruidServerHost']
+        DRUID_SERVER_PORT_DATA = config['DRUID']['DruidServerPortData']
+        DRUID_SERVER_PORT_QUERY = config['DRUID']['DruidServerPortQuery']
+        self.DRUID_SERVER_HEADERS = {'Content_Type': 'application/json'}
+        # Cloud Services
+        MONGO_STRING = config['CLOUDSERVER']['MongoClient']
+        # Camera
+        CAMERA_WIDTH = config['CAMERA']['Width']
+        CAMERA_HEIGHT = config['CAMERA']['Height']
+        CAMERA_CHANNELS = config['CAMERA']['Channels']
+        CAMERA_SHAPE = config['CAMERA']['Shape']
+
+
+        ### END CONFIG ###
+
+        # Local Inits
 
         # GPIO pins initialization for PIR sensor
         GPIO.setwarnings(False)
@@ -54,35 +81,21 @@ class PiClient:
         self.failedEventsList = []
 
         # Image place holders
-        self.shape = '(480, 640, 3)'
-        self.image = np.empty((480, 640, 3), dtype=np.uint8)
+        self.shape = CAMERA_SHAPE
+        self.image = np.empty(( int(CAMERA_HEIGHT), int(CAMERA_WIDTH), int(CAMERA_CHANNELS) ), dtype=np.uint8)
 
-        # Server info
-        SERVER_HOST = '192.168.0.105'
-        SERVER_PORT = '5000'
+        # API URLs
+        self.postEntryImg = 'http://' + SERVER_HOST + ':' + SERVER_PORT + API_PostEntryImg
 
-        # API URL       THE SERVER HOST AND PORT WILL BE IN CONFIG FILE LATER
-        self.url = 'http://' + SERVER_HOST + ':' + SERVER_PORT + '/sanushost/api/v1.0/entry_img'
-
-        # Druid Server
-        DRUID_SERVER_HOST = '192.168.0.107'
-        DRUID_SERVER_PORT_DATA = '8200'
-        DRUID_SERVER_PORT_QUERY = '8082'
-        self.DRUID_SERVER_HEADERS = {'Content_Type': 'application/json'}
-
-        # API url Druid       THE SERVER HOST AND PORT WILL BE IN CONFIG FILE LATER
+        # API Druid
         self.postData = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_DATA + '/v1/post/hospital'
         self.postQuery = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_QUERY + '/druid/v2?pretty'
-
-
-        # Time delay for alert sent in seconds
-        self.ALERT_TIME_DELAY = 20
 
         # Cloud Services
         self.cloudServices = CloudServices.CloudServices()
 
         # MongoDB
-        self.mongo = pymongo.MongoClient('mongodb://sanus:PiA6M4I0vcTU@ec2-54-224-191-119.compute-1.amazonaws.com:27017/')
+        self.mongo = pymongo.MongoClient(MONGO_STRING)
         
 
     # Function to take image from the camera and then sends it to be processed
@@ -185,7 +198,7 @@ class PiClient:
 
         # Send post request to the server
         try:
-            result = requests.post(self.url, json=payload, headers=headers)
+            result = requests.post(self.postEntryImg, json=payload, headers=headers)
             result = result.json()
         except Exception as e:
             print(e)
@@ -273,7 +286,7 @@ class PiClient:
 
                 result = None
                 try:
-                    result = requests.post(self.url, json=payload, headers=headers)
+                    result = requests.post(self.postEntryImg, json=payload, headers=headers)
                 except:
                     print("Tensorflow server unreachable, will save alert for later")
                     continue
