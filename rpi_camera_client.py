@@ -225,21 +225,21 @@ class PiClient:
         # be sent later to see if a further alert is needed.
 
         # Get data from MongoDB on that particular staff member
-        collection = self.mongo.hospital.test
-        staffDoc = collection.find_one({"staffID": result['StaffID'] })
-        nodDoc = collection.find_one({"nodeID": self.NODE_ID })
+        collection = self.mongo.development.hospital1
+        staffDoc = collection.find_one({"staff_id": result['StaffID'] })
+        nodDoc = collection.find_one({"node_id": self.NODE_ID })
 
          # Druid data schema : type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
         if(result['Status'] == False):
-            self.send_druid_data("Entry", nodDoc["nodeID"], staffDoc["staffID"], staffDoc["staff_title"], nodDoc["unit"], nodDoc["room_number"], "Entry", "Not clean")
+            self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Not clean")
             self.welcomequeue.put(result['StaffID'])
         elif(result['Status'] == True):
-            self.send_druid_data("Entry", nodDoc["nodeID"], staffDoc["staffID"], staffDoc["staff_title"], nodDoc["unit"], nodDoc["room_number"], "Entry", "Clean")
+            self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Clean")
             self.welcomequeue.put(result['StaffID'])
             return
 
         # Determine the hygiene status of the staff member, if there is a staff member face and they are not on dispenser list
-        self.msgqueue.put(((timestamp + self.ALERT_TIME_DELAY), payload, headers))
+        self.msgqueue.put(((timestamp + float(self.ALERT_TIME_DELAY)), payload, headers))
 
 
     # Thread that will run in a loop that will constantly check in the pqueue for any payloads that need to be processed and sent to the server
@@ -297,9 +297,9 @@ class PiClient:
                 print(result)
 
                 # MongoDB
-                collection = self.mongo.hospital.test
-                staffDoc = collection.find_one({"staffID": result['StaffID'] })
-                nodDoc = collection.find_one({"nodeID": self.NODE_ID })
+                collection = self.mongo.development.hospital1
+                staffDoc = collection.find_one({"staff_id": result['StaffID'] })
+                nodDoc = collection.find_one({"node_id": self.NODE_ID })
 
 
                 ## If we get "Status" = True message then that means that the staff member has breached protocol and not washed
@@ -307,14 +307,14 @@ class PiClient:
                 ## the alloted timeframe
 
                 if(result['Status'] == False):
-                    self.send_druid_data("Alert", nodDoc["nodeID"], staffDoc['staffID'], staffDoc['staff_title'], nodDoc["unit"], nodDoc["room_number"], "Alert", "Alert given")
-                    self.send_alert(staffDoc['staffID'])
+                    self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "Alert given")
+                    self.send_alert(staffDoc['staff_id'])
 
                     # Send SMS to staff member from AWS
-                    self.cloudServices.simple_notification_service(staffDoc["phone_num"], staffDoc['staffID'].capitalize() + ", you forgot to wash your hands, please do so.")
+                    self.cloudServices.simple_notification_service(staffDoc["staff_phoneNum"], staffDoc['staff_id'].capitalize() + ", you forgot to wash your hands, please do so.")
                     
-                elif(result.json()['Status'] == True):
-                    self.send_druid_data("Alert", nodDoc["nodeID"], staffDoc['staffID'], staffDoc['staff_title'], nodDoc["unit"], nodDoc["room_number"], "Alert", "No alert")
+                elif(result['Status'] == True):
+                    self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "No alert")
                     self.send_alert("clean")
 
 
