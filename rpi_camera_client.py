@@ -198,8 +198,11 @@ class PiClient:
 
         # Send post request to the server
         try:
-            result = requests.post(self.postEntryImg, json=payload, headers=headers)
+            result = requests.post(self.postEntryImg, json=payload, headers=headers, timeout=10.0)
             result = result.json()
+        except requests.exceptions.Timeout:
+            print("Timeout due to unreliable server connection - dropping image")
+            return
         except Exception as e:
             print(e)
             return
@@ -286,7 +289,10 @@ class PiClient:
 
                 result = None
                 try:
-                    result = requests.post(self.postEntryImg, json=payload, headers=headers)
+                    result = requests.post(self.postEntryImg, json=payload, headers=headers, timeout=10.0)
+                except requests.exceptions.Timeout:
+                    print("Timeout due to unreliable server connection - dropping image")
+                    continue
                 except:
                     print("Tensorflow server unreachable, will save alert for later")
                     continue
