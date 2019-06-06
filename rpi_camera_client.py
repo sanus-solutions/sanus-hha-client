@@ -67,6 +67,9 @@ class PiClient:
         self.camera.start_preview(fullscreen=False, window=(100, 20, 0, 0))
         time.sleep(2)
 
+        # Camera Delay
+        self.isSensorInDelayMode = False
+
         # Entry Queues
         # pqueue is for receiving the timestamps and payload (image capture)
         # msgqueue is for receiving the timestamps and payload for the 2nd post request to check if an alert needs to be sent to the staff member
@@ -133,7 +136,6 @@ class PiClient:
 
         try:
             result = requests.post(self.postData, json=payload, headers=self.DRUID_SERVER_HEADERS)
-            print(result.json())
 
             # If druid connection is healthy, then check if there are any failedEvents to send up as well
             if(len(self.failedEventsList) > 0):
@@ -198,8 +200,10 @@ class PiClient:
 
         # Send post request to the server
         try:
-            result = requests.post(self.postEntryImg, json=payload, headers=headers, timeout=10.0)
+            result = requests.post(self.postEntryImg, json=payload, headers=headers)
+            print("Returned this from Server: "+str(result))
             result = result.json()
+            print("Someone entered the room and this was returned: " + str(result))
         except requests.exceptions.Timeout:
             print("Timeout due to unreliable server connection - dropping image")
             return
@@ -208,38 +212,41 @@ class PiClient:
             return
 
 
-        # If no face was found on Recognition or TF server, then get out of this thread and drop
-        # the images.
-        if(result['Status'] == 'no face' or result['StaffID'] == None):
-            return
+        # Returns a List of Dictionaries like [{'StaffID': None, 'Status': 'no face'}]
+        for i in range(len(result)):
+            
+            # If no face was found on Recognition or TF server, then get out of this thread and drop
+            # the images.
+            if(result[i]['Status'] == 'no face' or result[i]['StaffID'] == None):
+                return
 
-        # Check here to see if the staffID has been seen in the last 30 seconds (to mitigate
-        # multiple alerts given out)
-        # If the staffID has NOT been seen, add it to pqueue, if it has YES, then stop this task and continue
-        if(result['StaffID'] != 'None' and self.staff_checker(result['StaffID']) == 0):
-            # add the staffID and timestamp kv pair to list
-            self.staffIDList[result['StaffID']] = time.time()
-            print("adding staff name to 'seen' list")
-        else:
-            return
+            # Check here to see if the staffID has been seen in the last 30 seconds (to mitigate
+            # multiple alerts given out)
+            # If the staffID has NOT been seen, add it to pqueue, if it has YES, then stop this task and continue
+            if(result[i]['StaffID'] != 'None' and self.staff_checker(result[i]['StaffID']) == 0):
+                # add the staffID and timestamp kv pair to list
+                self.staffIDList[result[i]['StaffID']] = time.time()
+                print("adding staff name to 'seen' list")
+            else:
+                return
 
-        # Check the status of the staff member. There will always be a welcome message sent here.
-        # Once the welcome message is sent to the audio device, the payload will be placed in the msqueue to
-        # be sent later to see if a further alert is needed.
+            # Check the status of the staff member. There will always be a welcome message sent here.
+            # Once the welcome message is sent to the audio device, the payload will be placed in the msqueue to
+            # be sent later to see if a further alert is needed.
 
-        # Get data from MongoDB on that particular staff member
-        collection = self.mongo.development.hospital1
-        staffDoc = collection.find_one({"staff_id": result['StaffID'] })
-        nodDoc = collection.find_one({"node_id": self.NODE_ID })
+            # Get data from MongoDB on that particular staff member
+            collection = self.mongo.development.hospital1
+            staffDoc = collection.find_one({"staff_id": result[i]['StaffID']})
+            nodDoc = collection.find_one({"node_id": self.NODE_ID })
 
-         # Druid data schema : type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
-        if(result['Status'] == False):
-            self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Not clean")
-            self.welcomequeue.put(result['StaffID'])
-        elif(result['Status'] == True):
-            self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Clean")
-            self.welcomequeue.put(result['StaffID'])
-            return
+             # Druid data schema : type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
+            if(result[i]['Status'] == False):
+                self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Not clean")
+                self.welcomequeue.put(result[i]['StaffID'])
+            elif(result[i]['Status'] == True):
+                self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Clean")
+                self.welcomequeue.put(result[i]['StaffID'])
+                return
 
         # Determine the hygiene status of the staff member, if there is a staff member face and they are not on dispenser list
         self.msgqueue.put(((timestamp + float(self.ALERT_TIME_DELAY)), payload, headers))
@@ -248,18 +255,48 @@ class PiClient:
     # Thread that will run in a loop that will constantly check in the pqueue for any payloads that need to be processed and sent to the server
     def control_thread(self): # always running on startup
 
+        #Create new list and timestamp for payload
+        images = []
+        timestamp = None
+        payload = None
+        headers = None
+
         while(True):
 
-            if(not self.pqueue.empty()):
-                
-                # Dequeue to get the first preprocessed image
-                timestamp, payload, headers = self.pqueue.get()
-                 
+            # Wait until the sensor is not in delay mode and is not triggered
+            if(GPIO.input(11) == 0 and self.isSensorInDelayMode == False and not self.pqueue.empty()):
+
+
+                print("Sending images to server! Size of the queue is: "+ str(self.pqueue.qsize()))
+
+                # Then loop through them all and put them in the image list
+                while(not self.pqueue.empty()):
+                    # Dequeue to get the first preprocessed image
+                    tstamp, pload, hder = self.pqueue.get()
+
+                    if(timestamp == None):
+                        # Add the first image timestamp
+                        timestamp = tstamp
+                        payload = pload
+                        headers = hder
+
+                    images.append(payload['Image'])
+        
+                # Add the 5+ images to the payload
+                payload['Image'] = images
+
                 # Create an HTTP thread for just this request
                 # send to HTTP thread
                 http_thread = threading.Thread(kwargs={'timestamp': timestamp, 'payload': payload, 'headers': headers}, target=client.http_thread)
                 http_thread.daemon = True
                 http_thread.start()
+
+                # Clear everything to free up space for next batch
+                images = []
+                timestamp = None
+                payload = None
+                headers = None
+
 
 
     # Thread that will constantly run on startup and only grab jobs from msgqueue that need to be sent
@@ -282,6 +319,9 @@ class PiClient:
                 # Now that 30 sec have past, we need to check and see if they have actually washed their hands in that time-frame
                 timestamp, payload, headers = self.msgqueue.get()
 
+
+                print("Sending check to see if they washed hands")
+
                 # Send second post request again and check result (see if staff member has
                 # used a hand hygiene device yet.)
                 # If there is a face, and it is staff, and they are still not in the dispenser list, send an alert to them
@@ -289,7 +329,7 @@ class PiClient:
 
                 result = None
                 try:
-                    result = requests.post(self.postEntryImg, json=payload, headers=headers, timeout=10.0)
+                    result = requests.post(self.postEntryImg, json=payload, headers=headers)
                 except requests.exceptions.Timeout:
                     print("Timeout due to unreliable server connection - dropping image")
                     continue
@@ -304,24 +344,27 @@ class PiClient:
 
                 # MongoDB
                 collection = self.mongo.development.hospital1
-                staffDoc = collection.find_one({"staff_id": result['StaffID'] })
-                nodDoc = collection.find_one({"node_id": self.NODE_ID })
+
+                # Returns a List of Dictionaries like [{'StaffID': None, 'Status': 'no face'}]
+                for i in range(len(result)):
+                    staffDoc = collection.find_one({"staff_id": result[i]['StaffID'] })
+                    nodDoc = collection.find_one({"node_id": self.NODE_ID })
 
 
-                ## If we get "Status" = True message then that means that the staff member has breached protocol and not washed
-                ## their hands within the 20 second period. If "Status" = False the staff member is clean and has used a soap dispenser within
-                ## the alloted timeframe
+                    ## If we get "Status" = True message then that means that the staff member has breached protocol and not washed
+                    ## their hands within the 20 second period. If "Status" = False the staff member is clean and has used a soap dispenser within
+                    ## the alloted timeframe
 
-                if(result['Status'] == False):
-                    self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "Alert given")
-                    self.send_alert(staffDoc['staff_id'])
+                    if(result[i]['Status'] == False):
+                        self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "Alert given")
+                        self.send_alert(staffDoc['staff_id'])
 
-                    # Send SMS to staff member from AWS
-                    self.cloudServices.simple_notification_service(staffDoc["staff_phoneNum"], staffDoc['staff_id'].capitalize() + ", you forgot to wash your hands, please do so.")
-                    
-                elif(result['Status'] == True):
-                    self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "No alert")
-                    self.send_alert("clean")
+                        # Send SMS to staff member from AWS
+                        self.cloudServices.simple_notification_service(staffDoc["staff_phoneNum"], staffDoc['staff_id'].capitalize() + ", you forgot to wash your hands, please do so.")
+                        
+                    elif(result[i]['Status'] == True):
+                        self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "No alert")
+                        self.send_alert("clean")
 
 
     # #### MIGHT BE REMOVED IN FUTURE RELEASE ####
@@ -359,7 +402,7 @@ if __name__ == '__main__':
     alert_thread.start()
 
     # sensor delay counter
-    isSensorInDelayMode = False
+    client.isSensorInDelayMode = False
 
     # Main loop for IoT Device
     while(True):
@@ -371,12 +414,12 @@ if __name__ == '__main__':
             # Sleep due to sensor delay time
             time.sleep(0.5)
 
-            isSensorInDelayMode = True
+            client.isSensorInDelayMode = True
 
 
         # Check if signal on low delay and take 3 more pictures
         # Yes I repeat code here - will make function for this later.
-        elif GPIO.input(11) == 0 and isSensorInDelayMode == True:
+        elif GPIO.input(11) == 0 and client.isSensorInDelayMode == True:
 
             for x in range(3):
 
@@ -387,4 +430,4 @@ if __name__ == '__main__':
                     # Take 1 photo every second for 3 seconds in delay mode
                     time.sleep(1)
 
-            isSensorInDelayMode = False
+            client.isSensorInDelayMode = False
