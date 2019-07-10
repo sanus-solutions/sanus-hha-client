@@ -164,6 +164,8 @@ class PiClient:
     # Returns : NONE
     def send_alert(self, name):
         os.system("aplay -q " + name + "A.wav")
+
+        print(name + " is not clean")
         time.sleep(1)
 
     # Peeks at head of pqueue.
@@ -201,7 +203,7 @@ class PiClient:
         # Send post request to the server
         try:
             result = requests.post(self.postEntryImg, json=payload, headers=headers)
-            print("Returned this from Server: "+str(result))
+            print("Returned this from Server: " + str(result))
             result = result.json()
             print("Someone entered the room and this was returned: " + str(result))
         except requests.exceptions.Timeout:
@@ -213,19 +215,22 @@ class PiClient:
 
 
         # Returns a List of Dictionaries like [{'StaffID': None, 'Status': 'no face'}]
-        for i in range(len(result)):
+        for i in range(len(result['Result'])):
+
+            resultName = result['Result'][i][0]
+            resultIsClean = result['Result'][i][1]
             
             # If no face was found on Recognition or TF server, then get out of this thread and drop
             # the images.
-            if(result[i]['Status'] == 'no face' or result[i]['StaffID'] == None):
+            if(result['Face'] == 0 or resultName == None):
                 return
 
             # Check here to see if the staffID has been seen in the last 30 seconds (to mitigate
             # multiple alerts given out)
             # If the staffID has NOT been seen, add it to pqueue, if it has YES, then stop this task and continue
-            if(result[i]['StaffID'] != 'None' and self.staff_checker(result[i]['StaffID']) == 0):
+            if(resultName != None and self.staff_checker(resultName) == 0):
                 # add the staffID and timestamp kv pair to list
-                self.staffIDList[result[i]['StaffID']] = time.time()
+                self.staffIDList[resultName] = time.time()
                 print("adding staff name to 'seen' list")
             else:
                 return
@@ -236,16 +241,16 @@ class PiClient:
 
             # Get data from MongoDB on that particular staff member
             collection = self.mongo.development.hospital1
-            staffDoc = collection.find_one({"staff_id": result[i]['StaffID']})
+            staffDoc = collection.find_one({"staff_id": resultName})
             nodDoc = collection.find_one({"node_id": self.NODE_ID })
 
              # Druid data schema : type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
-            if(result[i]['Status'] == False):
+            if(resultIsClean == False):
                 self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Not clean")
-                self.welcomequeue.put(result[i]['StaffID'])
-            elif(result[i]['Status'] == True):
+                self.welcomequeue.put(resultName)
+            elif(resultIsClean == True):
                 self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Clean")
-                self.welcomequeue.put(result[i]['StaffID'])
+                self.welcomequeue.put(resultName)
                 return
 
         # Determine the hygiene status of the staff member, if there is a staff member face and they are not on dispenser list
@@ -267,7 +272,7 @@ class PiClient:
             if(GPIO.input(11) == 0 and self.isSensorInDelayMode == False and not self.pqueue.empty()):
 
 
-                print("Sending images to server! Size of the queue is: "+ str(self.pqueue.qsize()))
+                print("Sending images to server! Size of the queue is: " + str(self.pqueue.qsize()))
 
                 # Then loop through them all and put them in the image list
                 while(not self.pqueue.empty()):
@@ -280,10 +285,10 @@ class PiClient:
                         payload = pload
                         headers = hder
 
-                    images.append(payload['Image'])
+                    #images.append(payload['Image'])
         
                 # Add the 5+ images to the payload
-                payload['Image'] = images
+                #payload['Image'] = images
 
                 # Create an HTTP thread for just this request
                 # send to HTTP thread
@@ -346,8 +351,12 @@ class PiClient:
                 collection = self.mongo.development.hospital1
 
                 # Returns a List of Dictionaries like [{'StaffID': None, 'Status': 'no face'}]
-                for i in range(len(result)):
-                    staffDoc = collection.find_one({"staff_id": result[i]['StaffID'] })
+                for i in range(len(result['Result'])):
+
+                    resultName = result['Result'][i][0]
+                    resultIsClean = result['Result'][i][1]
+
+                    staffDoc = collection.find_one({"staff_id": resultName })
                     nodDoc = collection.find_one({"node_id": self.NODE_ID })
 
 
@@ -355,14 +364,14 @@ class PiClient:
                     ## their hands within the 20 second period. If "Status" = False the staff member is clean and has used a soap dispenser within
                     ## the alloted timeframe
 
-                    if(result[i]['Status'] == False):
+                    if(resultIsClean == False):
                         self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "Alert given")
                         self.send_alert(staffDoc['staff_id'])
 
                         # Send SMS to staff member from AWS
                         self.cloudServices.simple_notification_service(staffDoc["staff_phoneNum"], staffDoc['staff_id'].capitalize() + ", you forgot to wash your hands, please do so.")
                         
-                    elif(result[i]['Status'] == True):
+                    elif(resultIsClean == True):
                         self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "No alert")
                         self.send_alert("clean")
 
@@ -404,10 +413,14 @@ if __name__ == '__main__':
     # sensor delay counter
     client.isSensorInDelayMode = False
 
+    ##### TEST
+    isItOn = True
+    #####
+
     # Main loop for IoT Device
     while(True):
 
-        if GPIO.input(11): # If the PIR sensor is giving a HIGH signal
+        if isItOn: # If the PIR sensor is giving a HIGH signal
 
             client.captureImage(client)
 
@@ -415,11 +428,12 @@ if __name__ == '__main__':
             time.sleep(0.5)
 
             client.isSensorInDelayMode = True
+            isItOn = False
 
 
         # Check if signal on low delay and take 3 more pictures
         # Yes I repeat code here - will make function for this later.
-        elif GPIO.input(11) == 0 and client.isSensorInDelayMode == True:
+        elif isItOn==False and client.isSensorInDelayMode == True:
 
             for x in range(3):
 
