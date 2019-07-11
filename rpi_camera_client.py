@@ -58,8 +58,8 @@ class PiClient:
 
         # GPIO pins initialization for PIR sensor
         GPIO.setwarnings(False)
-        GPIO.setmode(GPIO.BOARD)
-        GPIO.setup(11, GPIO.IN)
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(4, GPIO.IN)
 
         # Camera Init
         self.camera = picamera.PiCamera()
@@ -200,6 +200,7 @@ class PiClient:
         # Init request variable for responses
         result = None
 
+
         # Send post request to the server
         try:
             result = requests.post(self.postEntryImg, json=payload, headers=headers)
@@ -213,17 +214,16 @@ class PiClient:
             print(e)
             return
 
+        # If no face was found on Recognition or TF server, then get out of this thread and drop
+        # the images.
+        if(result['Face'] == 0):
+            return
 
         # Returns a List of Dictionaries like [{'StaffID': None, 'Status': 'no face'}]
         for i in range(len(result['Result'])):
 
             resultName = result['Result'][i][0]
             resultIsClean = result['Result'][i][1]
-            
-            # If no face was found on Recognition or TF server, then get out of this thread and drop
-            # the images.
-            if(result['Face'] == 0 or resultName == None):
-                return
 
             # Check here to see if the staffID has been seen in the last 30 seconds (to mitigate
             # multiple alerts given out)
@@ -269,7 +269,7 @@ class PiClient:
         while(True):
 
             # Wait until the sensor is not in delay mode and is not triggered
-            if(GPIO.input(11) == 0 and self.isSensorInDelayMode == False and not self.pqueue.empty()):
+            if(not self.pqueue.empty()):
 
 
                 print("Sending images to server! Size of the queue is: " + str(self.pqueue.qsize()))
@@ -286,21 +286,36 @@ class PiClient:
                         headers = hder
 
                     #images.append(payload['Image'])
+
+                    # Add the 5+ images to the payload
+                    #payload['Image'] = images
+
+                    # Create an HTTP thread for just this request
+                    # send to HTTP thread
+                    http_thread = threading.Thread(kwargs={'timestamp': timestamp, 'payload': payload, 'headers': headers}, target=client.http_thread)
+                    http_thread.daemon = True
+                    http_thread.start()
+
+                    # Clear everything to free up space for next batch
+                    images = []
+                    timestamp = None
+                    payload = None
+                    headers = None
         
-                # Add the 5+ images to the payload
-                #payload['Image'] = images
+                # # Add the 5+ images to the payload
+                # #payload['Image'] = images
 
-                # Create an HTTP thread for just this request
-                # send to HTTP thread
-                http_thread = threading.Thread(kwargs={'timestamp': timestamp, 'payload': payload, 'headers': headers}, target=client.http_thread)
-                http_thread.daemon = True
-                http_thread.start()
+                # # Create an HTTP thread for just this request
+                # # send to HTTP thread
+                # http_thread = threading.Thread(kwargs={'timestamp': timestamp, 'payload': payload, 'headers': headers}, target=client.http_thread)
+                # http_thread.daemon = True
+                # http_thread.start()
 
-                # Clear everything to free up space for next batch
-                images = []
-                timestamp = None
-                payload = None
-                headers = None
+                # # Clear everything to free up space for next batch
+                # images = []
+                # timestamp = None
+                # payload = None
+                # headers = None
 
 
 
@@ -413,14 +428,10 @@ if __name__ == '__main__':
     # sensor delay counter
     client.isSensorInDelayMode = False
 
-    ##### TEST
-    isItOn = True
-    #####
-
     # Main loop for IoT Device
     while(True):
 
-        if isItOn: # If the PIR sensor is giving a HIGH signal
+        if GPIO.input(4): # If the PIR sensor is giving a HIGH signal
 
             client.captureImage(client)
 
@@ -428,12 +439,11 @@ if __name__ == '__main__':
             time.sleep(0.5)
 
             client.isSensorInDelayMode = True
-            isItOn = False
 
 
         # Check if signal on low delay and take 3 more pictures
         # Yes I repeat code here - will make function for this later.
-        elif isItOn==False and client.isSensorInDelayMode == True:
+        elif GPIO.input(4) == 0 and client.isSensorInDelayMode == True:
 
             for x in range(3):
 
