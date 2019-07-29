@@ -36,6 +36,7 @@ class PiClient:
         SERVER_PORT = config['LOCALSERVER']['ServerPort']
         # API Endpoints
         API_PostEntryImg = config['LOCALSERVER']['API_EntryImg']
+        API_EntryStaffCheck = config['LOCALSERVER']['API_EntryStaffCheck']
         API_PostDruidData = config['DRUID']['API_PostDruidData']
         API_PostDruidQuery = config['DRUID']['API_PostDruidQuery']
         # Druid
@@ -89,6 +90,7 @@ class PiClient:
 
         # API URLs
         self.postEntryImg = 'http://' + SERVER_HOST + ':' + SERVER_PORT + API_PostEntryImg
+        self.postEntryStaffCheck = 'http://' + SERVER_HOST + ':' + SERVER_PORT + API_EntryStaffCheck
 
         # API Druid
         self.postData = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_DATA + API_PostDruidData
@@ -210,7 +212,6 @@ class PiClient:
             result = requests.post(self.postEntryImg, json=payload, headers=headers)
             result = result.json()
             print("Someone entered the room and this was returned: " + str(result))
-            print(time.time()-self.THETIME)
         except requests.exceptions.Timeout:
             print("Timeout due to unreliable server connection - dropping image")
             return
@@ -258,7 +259,8 @@ class PiClient:
                 return
 
         # Determine the hygiene status of the staff member, if there is a staff member face and they are not on dispenser list
-        self.msgqueue.put(((timestamp + float(self.ALERT_TIME_DELAY)), payload, headers))
+        ##### MIGHT HAVE TO MAKE THIS A LOOP IF WE HAVE MORE THAN 1 PERSON IN PHOTO #####
+        self.msgqueue.put(((timestamp + float(self.ALERT_TIME_DELAY)), result['Result'][i][0], headers))
 
 
     # Thread that will run in a loop that will constantly check in the pqueue for any payloads that need to be processed and sent to the server
@@ -341,7 +343,7 @@ class PiClient:
 
                 # Dequeue head and then keep dequeuing until head is 1 second later than earliest timestamp
                 # Now that 30 sec have past, we need to check and see if they have actually washed their hands in that time-frame
-                timestamp, payload, headers = self.msgqueue.get()
+                timestamp, staffname, headers = self.msgqueue.get()
 
 
                 print("Sending check to see if they washed hands")
@@ -349,11 +351,11 @@ class PiClient:
                 # Send second post request again and check result (see if staff member has
                 # used a hand hygiene device yet.)
                 # If there is a face, and it is staff, and they are still not in the dispenser list, send an alert to them
-                payload["Timestamp"] = time.time()
+                payload = {'Staff': staffname, 'Timestamp': timestamp}
 
                 result = None
                 try:
-                    result = requests.post(self.postEntryImg, json=payload, headers=headers)
+                    result = requests.post(self.postEntryStaffCheck, json=payload, headers=headers)
                 except requests.exceptions.Timeout:
                     print("Timeout due to unreliable server connection - dropping image")
                     continue
@@ -369,30 +371,29 @@ class PiClient:
                 # MongoDB
                 collection = self.mongo.development.hospital1
 
-                # Returns a List of Dictionaries like [{'StaffID': None, 'Status': 'no face'}]
-                for i in range(len(result['Result'])):
+                # Returns ['name', 0/1]
 
-                    resultName = result['Result'][i][0]
-                    resultIsClean = result['Result'][i][1]
+                resultName = result[0]
+                resultIsClean = result[1]
 
-                    staffDoc = collection.find_one({"staff_id": resultName })
-                    nodDoc = collection.find_one({"node_id": self.NODE_ID })
+                staffDoc = collection.find_one({"staff_id": resultName })
+                nodDoc = collection.find_one({"node_id": self.NODE_ID })
 
 
-                    ## If we get "Status" = True message then that means that the staff member has breached protocol and not washed
-                    ## their hands within the 20 second period. If "Status" = False the staff member is clean and has used a soap dispenser within
-                    ## the alloted timeframe
+                ## If we get "Status" = True message then that means that the staff member has breached protocol and not washed
+                ## their hands within the 20 second period. If "Status" = False the staff member is clean and has used a soap dispenser within
+                ## the alloted timeframe
 
-                    if(resultIsClean == False):
-                        self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "Alert given")
-                        self.send_alert(staffDoc['staff_id'])
+                if(resultIsClean == False):
+                    self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "Alert given")
+                    self.send_alert(staffDoc['staff_id'])
 
-                        # Send SMS to staff member from AWS
-                        self.cloudServices.simple_notification_service(staffDoc["staff_phoneNum"], staffDoc['staff_id'].capitalize() + ", you forgot to wash your hands, please do so.")
-                        
-                    elif(resultIsClean == True):
-                        self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "No alert")
-                        self.send_alert("clean")
+                    # Send SMS to staff member from AWS
+                    self.cloudServices.simple_notification_service(staffDoc["staff_phoneNum"], staffDoc['staff_id'].capitalize() + ", you forgot to wash your hands, please do so.")
+                    
+                elif(resultIsClean == True):
+                    self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "No alert")
+                    self.send_alert("clean")
 
 
     # #### MIGHT BE REMOVED IN FUTURE RELEASE ####
@@ -437,7 +438,6 @@ if __name__ == '__main__':
 
         if GPIO.input(4): # If the PIR sensor is giving a HIGH signal
 
-            client.THETIME = time.time()
             client.captureImage(client)
 
             # Sleep due to sensor delay time
@@ -453,7 +453,6 @@ if __name__ == '__main__':
             for x in range(3):
 
                     print("taking photo in delay mode")
-                    client.THETIME = time.time()
                     client.captureImage(client)
 
                     # Take 1 photo every second for 3 seconds in delay mode
