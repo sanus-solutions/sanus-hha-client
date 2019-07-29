@@ -99,6 +99,10 @@ class PiClient:
 
         # MongoDB
         self.mongo = pymongo.MongoClient(MONGO_STRING)
+
+
+        #### TEST ####
+        THETIME = None
         
 
     # Function to take image from the camera and then sends it to be processed
@@ -204,9 +208,9 @@ class PiClient:
         # Send post request to the server
         try:
             result = requests.post(self.postEntryImg, json=payload, headers=headers)
-            print("Returned this from Server: " + str(result))
             result = result.json()
             print("Someone entered the room and this was returned: " + str(result))
+            print(time.time()-self.THETIME)
         except requests.exceptions.Timeout:
             print("Timeout due to unreliable server connection - dropping image")
             return
@@ -433,6 +437,7 @@ if __name__ == '__main__':
 
         if GPIO.input(4): # If the PIR sensor is giving a HIGH signal
 
+            client.THETIME = time.time()
             client.captureImage(client)
 
             # Sleep due to sensor delay time
@@ -448,7 +453,7 @@ if __name__ == '__main__':
             for x in range(3):
 
                     print("taking photo in delay mode")
-
+                    client.THETIME = time.time()
                     client.captureImage(client)
 
                     # Take 1 photo every second for 3 seconds in delay mode
