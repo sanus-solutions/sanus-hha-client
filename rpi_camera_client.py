@@ -260,9 +260,9 @@ class PiClient:
                 self.welcomequeue.put(resultName)
                 return
 
-        # Determine the hygiene status of the staff member, if there is a staff member face and they are not on dispenser list
-        ##### MIGHT HAVE TO MAKE THIS A LOOP IF WE HAVE MORE THAN 1 PERSON IN PHOTO #####
-        self.msgqueue.put(((timestamp + float(self.ALERT_TIME_DELAY)), result['Result'][i][0], headers))
+            # Determine the hygiene status of the staff member, if there is a staff member face and they are not on dispenser list
+            ##### MIGHT HAVE TO MAKE THIS A LOOP IF WE HAVE MORE THAN 1 PERSON IN PHOTO #####
+            self.msgqueue.put(((timestamp + float(self.ALERT_TIME_DELAY)), resultName, headers))
 
 
     # Thread that will run in a loop that will constantly check in the pqueue for any payloads that need to be processed and sent to the server
@@ -343,9 +343,13 @@ class PiClient:
                 continue
             elif(self.peek_timestamp_at_alert() - time.time() <= 0.0):
 
+                # Create list of names that need to be alerted
+                StaffList = []
+
                 # Dequeue head and then keep dequeuing until head is 1 second later than earliest timestamp
                 # Now that 30 sec have past, we need to check and see if they have actually washed their hands in that time-frame
                 timestamp, staffname, headers = self.msgqueue.get()
+                StaffList.append(staffname)
 
 
                 print("Sending check to see if they washed hands")
@@ -353,7 +357,17 @@ class PiClient:
                 # Send second post request again and check result (see if staff member has
                 # used a hand hygiene device yet.)
                 # If there is a face, and it is staff, and they are still not in the dispenser list, send an alert to them
-                payload = {'Staff': staffname, 'Timestamp': timestamp}
+                # payload = {'StaffList': staffname, 'Timestamp': timestamp}
+                # namesToBeAlerted.append(staffname)
+
+
+                # Keep dequing the alert queue as long as the timestamps are the same (means that they were found in the same picture)
+                # and adding the names into the list
+                while(self.peek_timestamp_at_alert() == timestamp):
+                    t_timestamp, t_staffname, t_headers = self.msgqueue.get()
+                    namesToBeAlerted.append(t_staffname)
+
+                payload = {'StaffList': StaffList, 'Timestamp': timestamp}
 
                 result = None
                 try:
@@ -368,34 +382,52 @@ class PiClient:
                 # When the server returns STATUS and NAME of staff member.
                 # Send an alert accordingly.
                 result = result.json()
+
+                print("KLAUS NEW CODE RETURNED THIS NEXT RESULT")
                 print(result)
 
                 # MongoDB
                 # collection = self.mongo.development.hospital1
 
-                # Returns ['name', 0/1]
+                # Returns [['name', 0/1], [name2, 0/1], ...]
 
-                resultName = result[0]
-                resultIsClean = result[1]
+                isAllStaffClean = True
 
-                # staffDoc = collection.find_one({"staff_id": resultName })
-                # nodDoc = collection.find_one({"node_id": self.NODE_ID })
+                for i in range(len(result)):
 
+
+                    resultName = result[i][0]
+                    # resultIsClean = result[i][1]
+
+                    # staffDoc = collection.find_one({"staff_id": resultName })
+                    # nodDoc = collection.find_one({"node_id": self.NODE_ID })
+
+                    # If one of these results are ever FALSE then that means we need to send out an alert because
+                    # one of these staff members are NOT CLEAN
+                    if result[i][1] == False:
+                        isAllStaffClean = False
+
+                        # Send Alert Given event to druid
+                        self.send_druid_data("Alert", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Alert", "Alert given")
+                        continue
+                    else:
+
+                        # Staff member is clean, send event to druid, DO NOT give alert
+                        self.send_druid_data("Alert", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Alert", "No alert")
+
+
+
+
+                   
+
+                if isAllStaffClean == False:
+                    self.send_alert("reminder")
+                else:
+                    self.send_alert("clean")
 
                 ## If we get "Status" = True message then that means that the staff member has breached protocol and not washed
                 ## their hands within the 20 second period. If "Status" = False the staff member is clean and has used a soap dispenser within
                 ## the alloted timeframe
-
-                if(resultIsClean == False):
-                    self.send_druid_data("Alert", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Alert", "Alert given")
-                    self.send_alert("reminder")
-
-                    # Send SMS to staff member from AWS
-                    # self.cloudServices.simple_notification_service(staffDoc["staff_phoneNum"], staffDoc['staff_id'].capitalize() + ", you forgot to wash your hands, please do so.")
-                    
-                elif(resultIsClean == True):
-                    self.send_druid_data("Alert", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Alert", "No alert")
-                    self.send_alert("clean")
 
 
     # #### MIGHT BE REMOVED IN FUTURE RELEASE ####
