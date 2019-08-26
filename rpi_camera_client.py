@@ -96,11 +96,11 @@ class PiClient:
         self.postData = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_DATA + API_PostDruidData
         self.postQuery = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_QUERY + API_PostDruidQuery
 
-        # Cloud Services
-        self.cloudServices = CloudServices.CloudServices()
+        # # Cloud Services
+        # self.cloudServices = CloudServices.CloudServices()
 
-        # MongoDB
-        self.mongo = pymongo.MongoClient(MONGO_STRING)
+        # # MongoDB
+        # self.mongo = pymongo.MongoClient(MONGO_STRING)
 
 
         #### TEST ####
@@ -160,16 +160,17 @@ class PiClient:
     def send_welcome(self, name):
 
         if name == "clean":
-            os.system("aplay -q cleanA.wav")
+            print("Staff member is clean")
         else:
-            os.system("aplay -q " + name + "W.wav")
+            os.system("aplay -q welcome.wav")
 
         time.sleep(1)
 
     # Function to play .wav files to alert staff members.
     # Returns : NONE
     def send_alert(self, name):
-        os.system("aplay -q " + name + "A.wav")
+        if name != "clean":
+            os.system("aplay -q reminder.wav")
 
         print(name + " is not clean")
         time.sleep(1)
@@ -205,7 +206,6 @@ class PiClient:
 
         # Init request variable for responses
         result = None
-
 
         # Send post request to the server
         try:
@@ -245,16 +245,18 @@ class PiClient:
             # be sent later to see if a further alert is needed.
 
             # Get data from MongoDB on that particular staff member
-            collection = self.mongo.development.hospital1
-            staffDoc = collection.find_one({"staff_id": resultName})
-            nodDoc = collection.find_one({"node_id": self.NODE_ID })
+            # collection = self.mongo.development.hospital1
+            # staffDoc = collection.find_one({"staff_id": resultName})
+            # nodDoc = collection.find_one({"node_id": self.NODE_ID })
 
              # Druid data schema : type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
             if(resultIsClean == False):
-                self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Not clean")
+                # self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Not clean")
+                self.send_druid_data("Entry", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Entry", "Not clean")
                 self.welcomequeue.put(resultName)
             elif(resultIsClean == True):
-                self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Clean")
+                # self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Clean")
+                self.send_druid_data("Entry", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Entry", "Clean")
                 self.welcomequeue.put(resultName)
                 return
 
@@ -369,15 +371,15 @@ class PiClient:
                 print(result)
 
                 # MongoDB
-                collection = self.mongo.development.hospital1
+                # collection = self.mongo.development.hospital1
 
                 # Returns ['name', 0/1]
 
                 resultName = result[0]
                 resultIsClean = result[1]
 
-                staffDoc = collection.find_one({"staff_id": resultName })
-                nodDoc = collection.find_one({"node_id": self.NODE_ID })
+                # staffDoc = collection.find_one({"staff_id": resultName })
+                # nodDoc = collection.find_one({"node_id": self.NODE_ID })
 
 
                 ## If we get "Status" = True message then that means that the staff member has breached protocol and not washed
@@ -385,14 +387,14 @@ class PiClient:
                 ## the alloted timeframe
 
                 if(resultIsClean == False):
-                    self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "Alert given")
-                    self.send_alert(staffDoc['staff_id'])
+                    self.send_druid_data("Alert", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Alert", "Alert given")
+                    self.send_alert("reminder")
 
                     # Send SMS to staff member from AWS
-                    self.cloudServices.simple_notification_service(staffDoc["staff_phoneNum"], staffDoc['staff_id'].capitalize() + ", you forgot to wash your hands, please do so.")
+                    # self.cloudServices.simple_notification_service(staffDoc["staff_phoneNum"], staffDoc['staff_id'].capitalize() + ", you forgot to wash your hands, please do so.")
                     
                 elif(resultIsClean == True):
-                    self.send_druid_data("Alert", nodDoc["node_id"], staffDoc['staff_id'], staffDoc['staff_title'], nodDoc["node_unit"], nodDoc["node_roomNum"], "Alert", "No alert")
+                    self.send_druid_data("Alert", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Alert", "No alert")
                     self.send_alert("clean")
 
 
