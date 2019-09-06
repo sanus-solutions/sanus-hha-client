@@ -140,8 +140,6 @@ class PiClient:
         retval, buffer = cv2.imencode('.jpg', img)
         image_64 = base64.b64encode(buffer)
 
-        print(type(image_64), len(image_64))
-
         client.prepare_and_process(client.NODE_ID, timestamp, image_64, client.shape)
 
     # Function to send raw data to druid server
