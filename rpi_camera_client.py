@@ -2,11 +2,13 @@
     Author: Luka Antolic-Soban
 """
 import RPi.GPIO as GPIO
+import cv2
 import time
 import queue
 import threading
 import random
-import sys, os, requests, time, json, picamera, io
+import logging
+import sys, os, requests, json, picamera, io
 from PIL import Image
 import base64
 import numpy as np
@@ -16,15 +18,19 @@ import pymongo
 import configparser
 from sanus_cloud_services import CloudServices
 
+
+try:
+    config = configparser.ConfigParser()
+    config.read('config.ini')
+except:
+    raise Exception("config.ini file missing.")
+
 """
 	Class to encapsulate the Raspberry Pi IoT device that will be attached to the doorways of hospital patient rooms.
 """
 class PiClient:
 
     def __init__(self):
-
-        config = configparser.ConfigParser()
-        config.read('config.ini')
         
         ### Initialize config values
         self.ClientType = config['PROPERTIES']['ClientType']
@@ -51,48 +57,49 @@ class PiClient:
         self.CAMERA_HEIGHT = int(config['CAMERA']['Height'])
         self.CAMERA_CHANNELS = int(config['CAMERA']['Channels'])
         self.CAMERA_SHAPE = config['CAMERA']['Shape']
-
-
         ### END CONFIG ###
 
-        # Local Inits
+        ## Local Inits
 
-        # GPIO pins initialization for PIR sensor
+        ## Logging
+        self.init_logger()
+
+        ## GPIO pins initialization for PIR sensor
         GPIO.setwarnings(False)
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(4, GPIO.IN)
 
-        # Camera Init
+        ## Camera Init
         self.camera = picamera.PiCamera()
         self.camera.resolution = (self.CAMERA_WIDTH, self.CAMERA_HEIGHT)
         self.camera.start_preview(fullscreen=False, window=(100, 20, 0, 0))
         time.sleep(2)
 
-        # Camera Delay
+        ## Camera Delay
         self.isSensorInDelayMode = False
 
-        # Entry Queues
+        ## Entry Queues
         # pqueue is for receiving the timestamps and payload (image capture)
         # msgqueue is for receiving the timestamps and payload for the 2nd post request to check if an alert needs to be sent to the staff member
         self.pqueue = queue.PriorityQueue()
         self.msgqueue = queue.PriorityQueue()
         self.welcomequeue = queue.Queue()
 
-        # StaffID list
+        ## StaffID list
         self.staffIDList = {}
 
-        # List of unsuccessful Druid Events
+        ## List of unsuccessful Druid Events
         self.failedEventsList = []
 
-        # Image place holders
+        ## Image place holders
         self.shape = self.CAMERA_SHAPE
         self.image = np.empty(( int(self.CAMERA_HEIGHT), int(self.CAMERA_WIDTH), int(self.CAMERA_CHANNELS) ), dtype=np.uint8)
 
-        # API URLs
+        ## API URLs
         self.postEntryImg = 'http://' + SERVER_HOST + ':' + SERVER_PORT + API_PostEntryImg
         self.postEntryStaffCheck = 'http://' + SERVER_HOST + ':' + SERVER_PORT + API_EntryStaffCheck
 
-        # API Druid
+        ## API Druid
         self.postData = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_DATA + API_PostDruidData
         self.postQuery = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_QUERY + API_PostDruidQuery
 
@@ -101,25 +108,39 @@ class PiClient:
 
         # # MongoDB
         # self.mongo = pymongo.MongoClient(MONGO_STRING)
+    
+    ## Logging Initialization    
+    def init_logger(self, ):
+        ## Get params from config file
+        debugLevel = config['DEBUG']['LogLevel']
 
+        ## Logger
+        if debugLevel == 'Info':
+            level = logging.INFO
+        else:
+            level = logging.DEBUG
 
-        #### TEST ####
-        THETIME = None
-        
+        self.logger = logging.getLogger(__name__)
+        logFileName = "Node" + self.NODE_ID + ".log"
+        logging.basicConfig(filename=logFileName, level=level, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     # Function to take image from the camera and then sends it to be processed
     # Input: None
     # Returns: None
     def captureImage(self, client):
+
+        print("TAKING IMAGE")
+
         # Initial timestamp of image capture
         timestamp = time.time()
 
         # Take a picture, then send that picture to the HTTP thread
-        img = np.empty(( self.CAMERA_HEIGHT, self.CAMERA_WIDTH, self.CAMERA_CHANNELS), dtype=np.uint8)
+        img = np.empty(( self.CAMERA_WIDTH, self.CAMERA_HEIGHT, self.CAMERA_CHANNELS), dtype=np.uint8)
         client.camera.capture(img, 'rgb')
+        retval, buffer = cv2.imencode('.jpg', img)
+        image_64 = base64.b64encode(buffer)
 
-        image_temp = img.astype(np.float64)
-        image_64 = base64.b64encode(image_temp).decode('ascii')
+        print(type(image_64), len(image_64))
 
         client.prepare_and_process(client.NODE_ID, timestamp, image_64, client.shape)
 
@@ -216,7 +237,7 @@ class PiClient:
             print("Timeout due to unreliable server connection - dropping image")
             return
         except Exception as e:
-            print(e)
+            print("Exception is: " + str(e))
             return
 
         # If no face was found on Recognition or TF server, then get out of this thread and drop
@@ -276,7 +297,7 @@ class PiClient:
 
         while(True):
 
-            # Wait until the sensor is not in delay mode and is not triggered
+            ## Continuously grab the images from the queue and send it to the server
             if(not self.pqueue.empty()):
 
 
@@ -417,9 +438,6 @@ class PiClient:
 
 
 
-
-                   
-
                 if isAllStaffClean == False:
                     self.send_alert("reminder")
                 else:
@@ -458,17 +476,21 @@ if __name__ == '__main__':
 
     # Create/Initiate threads
     control_thread = threading.Thread(name='control_thread', target=client.control_thread)
+    logging.info('Created Control Thread')
     alert_thread = threading.Thread(name='alert_thread', target=client.alert_thread)
+    logging.info('Created Alert Thread')
     control_thread.daemon = True
     alert_thread.daemon = True
     control_thread.start()
     alert_thread.start()
+    logging.info('Control and Alert Threads Started')
 
     # sensor delay counter
     client.isSensorInDelayMode = False
 
     # Main loop for IoT Device
     while(True):
+
 
         if GPIO.input(4): # If the PIR sensor is giving a HIGH signal
 
@@ -479,7 +501,7 @@ if __name__ == '__main__':
 
             client.isSensorInDelayMode = True
 
-
+        # UN-NEEDED FOR NEW PIR ##
         # Check if signal on low delay and take 3 more pictures
         # Yes I repeat code here - will make function for this later.
         elif GPIO.input(4) == 0 and client.isSensorInDelayMode == True:
