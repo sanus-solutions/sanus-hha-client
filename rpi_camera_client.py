@@ -106,11 +106,16 @@ class PiClient:
         # # Cloud Services
         # self.cloudServices = CloudServices.CloudServices()
 
-        # # MongoDB
-        # self.mongo = pymongo.MongoClient(MONGO_STRING)
+        # MongoDB
+        self.mongo = pymongo.MongoClient(MONGO_STRING)
     
     ## Logging Initialization    
     def init_logger(self, ):
+
+        ## Check if Log folder exists
+        if not os.path.exists("log"):
+            os.makedirs("log")
+
         ## Get params from config file
         debugLevel = config['DEBUG']['LogLevel']
 
@@ -121,7 +126,7 @@ class PiClient:
             level = logging.DEBUG
 
         self.logger = logging.getLogger(__name__)
-        logFileName = "Node" + self.NODE_ID + ".log"
+        logFileName = "log/Node" + self.NODE_ID + ".log"
         logging.basicConfig(filename=logFileName, level=level, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     # Function to take image from the camera and then sends it to be processed
@@ -129,7 +134,7 @@ class PiClient:
     # Returns: None
     def captureImage(self, client):
 
-        print("TAKING IMAGE")
+        logging.info('Image Taken')
 
         # Initial timestamp of image capture
         timestamp = time.time()
@@ -138,7 +143,7 @@ class PiClient:
         img = np.empty(( self.CAMERA_WIDTH, self.CAMERA_HEIGHT, self.CAMERA_CHANNELS), dtype=np.uint8)
         client.camera.capture(img, 'rgb')
         retval, buffer = cv2.imencode('.jpg', img)
-        image_64 = base64.b64encode(buffer)
+        image_64 = base64.b64encode(buffer).decode('ascii')
 
         client.prepare_and_process(client.NODE_ID, timestamp, image_64, client.shape)
 
@@ -190,8 +195,6 @@ class PiClient:
     def send_alert(self, name):
         if name != "clean":
             os.system("aplay -q reminder.wav")
-
-        print(name + " is not clean")
         time.sleep(1)
 
     # Peeks at head of pqueue.
@@ -230,17 +233,21 @@ class PiClient:
         try:
             result = requests.post(self.postEntryImg, json=payload, headers=headers)
             result = result.json()
-            print("Someone entered the room and this was returned: " + str(result))
+            self.logger.info("Someone entered the room and this was returned: " + str(result))
         except requests.exceptions.Timeout:
-            print("Timeout due to unreliable server connection - dropping image")
+            self.logger.error("Timeout due to unreliable server connection - dropping image")
             return
         except Exception as e:
-            print("Exception is: " + str(e))
+            self.logger.error("Exception is: " + str(e))
+            text_file = open("log/"+str(timestamp)+".txt", "w")
+            text_file.write(payload["Image"])
+            text_file.close()
             return
 
         # If no face was found on Recognition or TF server, then get out of this thread and drop
         # the images.
         if(result['Face'] == 0):
+            self.logger.info('No face found in image')
             return
 
         # Returns a List of Dictionaries like [{'StaffID': None, 'Status': 'no face'}]
@@ -255,7 +262,7 @@ class PiClient:
             if(resultName != None and self.staff_checker(resultName) == 0):
                 # add the staffID and timestamp kv pair to list
                 self.staffIDList[resultName] = time.time()
-                print("adding staff name to 'seen' list")
+                self.logger.info("Added staff member to SEEN list")
             else:
                 return
 
@@ -264,18 +271,18 @@ class PiClient:
             # be sent later to see if a further alert is needed.
 
             # Get data from MongoDB on that particular staff member
-            # collection = self.mongo.development.hospital1
-            # staffDoc = collection.find_one({"staff_id": resultName})
-            # nodDoc = collection.find_one({"node_id": self.NODE_ID })
+            collection = self.mongo.test.jhm
+            staffDoc = collection.find_one({"Name": resultName})
+            nodDoc = collection.find_one({"NodeID": self.NODE_ID })
 
              # Druid data schema : type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
             if(resultIsClean == False):
-                # self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Not clean")
-                self.send_druid_data("Entry", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Entry", "Not clean")
+                self.send_druid_data("Entry", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Entry", "Not clean")
+                # self.send_druid_data("Entry", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Entry", "Not clean")
                 self.welcomequeue.put(resultName)
             elif(resultIsClean == True):
-                # self.send_druid_data("Entry", nodDoc["node_id"], staffDoc["staff_id"], staffDoc["staff_title"], nodDoc["node_unit"], nodDoc["node_roomNum"], "Entry", "Clean")
-                self.send_druid_data("Entry", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Entry", "Clean")
+                self.send_druid_data("Entry", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Entry", "Clean")
+                # self.send_druid_data("Entry", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Entry", "Clean")
                 self.welcomequeue.put(resultName)
                 return
 
@@ -299,7 +306,7 @@ class PiClient:
             if(not self.pqueue.empty()):
 
 
-                print("Sending images to server! Size of the queue is: " + str(self.pqueue.qsize()))
+                self.logger.info('Sending images to server')
 
                 # Then loop through them all and put them in the image list
                 while(not self.pqueue.empty()):
@@ -307,42 +314,24 @@ class PiClient:
                     tstamp, pload, hder = self.pqueue.get()
 
                     if(timestamp == None):
-                        # Add the first image timestamp
+                        # Add the first image timestamp so that the rest of the images in this batch have the same timestamp
                         timestamp = tstamp
                         payload = pload
                         headers = hder
 
-                    #images.append(payload['Image'])
-
-                    # Add the 5+ images to the payload
-                    #payload['Image'] = images
-
                     # Create an HTTP thread for just this request
-                    # send to HTTP thread
+                    # and send to HTTP thread
                     http_thread = threading.Thread(kwargs={'timestamp': timestamp, 'payload': payload, 'headers': headers}, target=client.http_thread)
                     http_thread.daemon = True
                     http_thread.start()
+
+                    self.logger.info('HTTP Thread created for this request')
 
                     # Clear everything to free up space for next batch
                     images = []
                     timestamp = None
                     payload = None
                     headers = None
-        
-                # # Add the 5+ images to the payload
-                # #payload['Image'] = images
-
-                # # Create an HTTP thread for just this request
-                # # send to HTTP thread
-                # http_thread = threading.Thread(kwargs={'timestamp': timestamp, 'payload': payload, 'headers': headers}, target=client.http_thread)
-                # http_thread.daemon = True
-                # http_thread.start()
-
-                # # Clear everything to free up space for next batch
-                # images = []
-                # timestamp = None
-                # payload = None
-                # headers = None
 
 
 
@@ -370,8 +359,7 @@ class PiClient:
                 timestamp, staffname, headers = self.msgqueue.get()
                 StaffList.append(staffname)
 
-
-                print("Sending check to see if they washed hands")
+                self.logger.info("Sending check to see if they washed hands")
 
                 # Send second post request again and check result (see if staff member has
                 # used a hand hygiene device yet.)
@@ -384,7 +372,7 @@ class PiClient:
                 # and adding the names into the list
                 while(self.peek_timestamp_at_alert() == timestamp):
                     t_timestamp, t_staffname, t_headers = self.msgqueue.get()
-                    namesToBeAlerted.append(t_staffname)
+                    StaffList.append(t_staffname)
 
                 payload = {'StaffList': StaffList, 'Timestamp': timestamp}
 
@@ -392,21 +380,20 @@ class PiClient:
                 try:
                     result = requests.post(self.postEntryStaffCheck, json=payload, headers=headers)
                 except requests.exceptions.Timeout:
-                    print("Timeout due to unreliable server connection - dropping image")
+                    self.logger.error("Timeout due to unreliable server connection - dropping image")
                     continue
                 except:
-                    print("Tensorflow server unreachable, will save alert for later")
+                    self.logger.error("Tensorflow server unreachable, will save alert for later")
                     continue
 
                 # When the server returns STATUS and NAME of staff member.
                 # Send an alert accordingly.
                 result = result.json()
 
-                print("KLAUS NEW CODE RETURNED THIS NEXT RESULT")
-                print(result)
+                self.logger.info("Alert: " + str(result))
 
                 # MongoDB
-                # collection = self.mongo.development.hospital1
+                collection = self.mongo.test.jhm
 
                 # Returns [['name', 0/1], [name2, 0/1], ...]
 
@@ -416,10 +403,9 @@ class PiClient:
 
 
                     resultName = result[i][0]
-                    # resultIsClean = result[i][1]
 
-                    # staffDoc = collection.find_one({"staff_id": resultName })
-                    # nodDoc = collection.find_one({"node_id": self.NODE_ID })
+                    staffDoc = collection.find_one({"StaffID": resultName })
+                    nodDoc = collection.find_one({"NodeID": self.NODE_ID })
 
                     # If one of these results are ever FALSE then that means we need to send out an alert because
                     # one of these staff members are NOT CLEAN
@@ -427,12 +413,11 @@ class PiClient:
                         isAllStaffClean = False
 
                         # Send Alert Given event to druid
-                        self.send_druid_data("Alert", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Alert", "Alert given")
+                        self.send_druid_data("Alert", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Alert", "Alert given")
                         continue
                     else:
-
                         # Staff member is clean, send event to druid, DO NOT give alert
-                        self.send_druid_data("Alert", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Alert", "No alert")
+                        self.send_druid_data("Alert", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Alert", "No alert")
 
 
 
@@ -458,7 +443,7 @@ class PiClient:
             # Staff not in list so we are good to give an alert
             return 0
 
-        if(time.time() - self.staffIDList.get(staffID) > 30.0):
+        if(time.time() - self.staffIDList.get(staffID) > float(self.ALERT_TIME_DELAY)):
             # check timestamps to see if there is at least a 30 sec difference between them
             # if so, we are good to give an alert
             return 0
