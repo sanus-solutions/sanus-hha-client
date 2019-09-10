@@ -278,11 +278,19 @@ class PiClient:
              # Druid data schema : type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
             if(resultIsClean == False):
                 self.send_druid_data("Entry", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Entry", "Not clean")
-                # self.send_druid_data("Entry", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Entry", "Not clean")
+                self.logger.info("DRUID EVENT: " + "Entry," + nodDoc["NodeID"] + ","
+                    + staffDoc["Name"] + "," 
+                    + staffDoc["Title"] + ","
+                    + nodDoc["Unit"] + ","
+                    + nodDoc["RoomNumber"] + "," + "Entry," + "Not clean")
                 self.welcomequeue.put(resultName)
             elif(resultIsClean == True):
                 self.send_druid_data("Entry", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Entry", "Clean")
-                # self.send_druid_data("Entry", "DEMO1", resultName, "Nurse", "ICU", "TIFT1", "Entry", "Clean")
+                self.logger.info("DRUID EVENT: " + "Entry," + nodDoc["NodeID"] + ","
+                    + staffDoc["Name"] + "," 
+                    + staffDoc["Title"] + ","
+                    + nodDoc["Unit"] + ","
+                    + nodDoc["RoomNumber"] + "," + "Entry," + "Clean")
                 self.welcomequeue.put(resultName)
                 return
 
@@ -404,8 +412,9 @@ class PiClient:
 
                     resultName = result[i][0]
 
-                    staffDoc = collection.find_one({"StaffID": resultName })
+                    staffDoc = collection.find_one({"Name": resultName})
                     nodDoc = collection.find_one({"NodeID": self.NODE_ID })
+
 
                     # If one of these results are ever FALSE then that means we need to send out an alert because
                     # one of these staff members are NOT CLEAN
@@ -414,10 +423,20 @@ class PiClient:
 
                         # Send Alert Given event to druid
                         self.send_druid_data("Alert", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Alert", "Alert given")
+                        self.logger.info("DRUID EVENT: " + "Alert," + nodDoc["NodeID"] + ","
+                            + staffDoc["Name"] + "," 
+                            + staffDoc["Title"] + ","
+                            + nodDoc["Unit"] + ","
+                            + nodDoc["RoomNumber"] + "," + "Alert," + "Alert given")
                         continue
                     else:
                         # Staff member is clean, send event to druid, DO NOT give alert
                         self.send_druid_data("Alert", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Alert", "No alert")
+                        self.logger.info("DRUID EVENT: " + "Alert," + nodDoc["NodeID"] + ","
+                            + staffDoc["Name"] + "," 
+                            + staffDoc["Title"] + ","
+                            + nodDoc["Unit"] + ","
+                            + nodDoc["RoomNumber"] + "," + "Alert," + "No alert")
 
 
 
