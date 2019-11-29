@@ -26,7 +26,7 @@ new_docs = [
 	}, {
 
 		"staff_id": "00001",
-		"name": "luka",
+		"name": "fucboi",
 		"title": "admin",
 		"department": "None",
 		"unit": "None",

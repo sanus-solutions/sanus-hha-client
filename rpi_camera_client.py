@@ -255,9 +255,8 @@ class PiClient:
         # Returns a List of Dictionaries like [{'StaffID': None, 'Status': 'no face'}]
         for i in range(len(result['Result'])):
 
-            resultName = result['Result'][i][0]
-            resultIsClean = result['Result'][i][1]
-
+            resultName = result['Result'][i]
+            print(resultName)
             # Check here to see if the staffID has been seen in the last 30 seconds (to mitigate
             # multiple alerts given out)
             # If the staffID has NOT been seen, add it to pqueue, if it has YES, then stop this task and continue
@@ -277,15 +276,33 @@ class PiClient:
             staffDoc = collection.find_one({"name": resultName})
             nodDoc = collection.find_one({"node_id": self.NODE_ID })
 
+            print("MongoDB returned: " + staffDoc["name"])
 
             # Now that we have a name for the face, just send the data up to Druid
             # Druid data schema : timestamp, action, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
-            self.send_druid_data(timestamp, "Entry", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Entry", "None")
-            self.logger.info("DRUID EVENT: " + "Entry," + nodDoc["NodeID"] + ","
-                + staffDoc["Name"] + "," 
-                + staffDoc["Title"] + ","
-                + nodDoc["Unit"] + ","
-                + nodDoc["RoomNumber"] + "," + "Entry," + "None")
+            self.send_druid_data(timestamp, "Entry", nodDoc["node_id"], staffDoc["name"], staffDoc["title"], nodDoc["unit"], nodDoc["room_number"], "Entry", "None")
+            self.logger.info("DRUID EVENT: " + "Entry," + nodDoc["node_id"] + ","
+                + staffDoc["name"] + "," 
+                + staffDoc["title"] + ","
+                + nodDoc["unit"] + ","
+                + nodDoc["room_number"] + "," + "Entry," + "None")
+
+
+            the_time = datetime.datetime.utcfromtimestamp(timestamp).isoformat()
+            # Also send to MongoDB
+            new_doc = {
+                "timestamp": the_time,
+                'type': "Entry",
+                'node_id': nodDoc["node_id"],
+                'staff_id': staffDoc["name"],
+                'staff_title': staffDoc["title"],
+                'unit': nodDoc["unit"],
+                'room_number': nodDoc["room_number"],
+                'response_type': "Entry",
+                'response_message': "None"
+            }
+            collection = self.mongo.kidsrkids.b35.history
+            collection.insert_one(new_doc)
 
             # Determine the hygiene status of the staff member, if there is a staff member face and they are not on dispenser list
             ##### MIGHT HAVE TO MAKE THIS A LOOP IF WE HAVE MORE THAN 1 PERSON IN PHOTO #####
@@ -363,13 +380,9 @@ if __name__ == '__main__':
     # Create/Initiate threads
     control_thread = threading.Thread(name='control_thread', target=client.control_thread)
     logging.info('Created Control Thread')
-    alert_thread = threading.Thread(name='alert_thread', target=client.alert_thread)
-    logging.info('Created Alert Thread')
     control_thread.daemon = True
-    alert_thread.daemon = True
     control_thread.start()
-    alert_thread.start()
-    logging.info('Control and Alert Threads Started')
+    logging.info('Control Thread Started')
 
     # sensor delay counter
     client.isSensorInDelayMode = False
@@ -385,19 +398,19 @@ if __name__ == '__main__':
             # Sleep due to sensor delay time
             time.sleep(0.5)
 
-            client.isSensorInDelayMode = True
+            # client.isSensorInDelayMode = True
 
-        # UN-NEEDED FOR NEW PIR ##
-        # Check if signal on low delay and take 3 more pictures
-        # Yes I repeat code here - will make function for this later.
-        elif GPIO.input(4) == 0 and client.isSensorInDelayMode == True:
+        # # UN-NEEDED FOR NEW PIR ##
+        # # Check if signal on low delay and take 3 more pictures
+        # # Yes I repeat code here - will make function for this later.
+        # elif GPIO.input(4) == 0 and client.isSensorInDelayMode == True:
 
-            for x in range(3):
+        #     for x in range(3):
 
-                    print("taking photo in delay mode")
-                    client.captureImage(client)
+        #             print("taking photo in delay mode")
+        #             client.captureImage(client)
 
-                    # Take 1 photo every second for 3 seconds in delay mode
-                    time.sleep(1)
+        #             # Take 1 photo every second for 3 seconds in delay mode
+        #             time.sleep(1)
 
-            client.isSensorInDelayMode = False
+        #     client.isSensorInDelayMode = False
