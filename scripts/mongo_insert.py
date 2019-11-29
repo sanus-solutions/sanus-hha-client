@@ -15,21 +15,28 @@ import configparser
 client = pymongo.MongoClient("mongodb://192.168.1.101:27017/")
 
 # access the collection
-collection = client.test.jhm
+collection = client.kidsrkids.b35
 
 new_docs = [
 	{
-		"NodeID" : "0",
-		"Unit": "ICU",
-		"RoomNumber": "25A",
-		"Department": "Oncology"
+		"node_id" : "0",
+		"unit": "None",
+		"room_number": "Pilot",
+		"department": "None"
 	}, {
 
-		"StaffID": "234B",
-		"Name": "luka",
-		"Title": "nurse",
-		"Department": "Oncology",
-		"Unit": "None",
+		"staff_id": "00001",
+		"name": "luka",
+		"title": "admin",
+		"department": "None",
+		"unit": "None",
+	}, {
+
+		"staff_id": "00002",
+		"name": "klaus",
+		"title": "admin",
+		"department": "None",
+		"unit": "None",
 	}
 
 ]

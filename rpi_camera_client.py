@@ -43,6 +43,7 @@ class PiClient:
         # API Endpoints
         API_PostEntryImg = config['LOCALSERVER']['API_EntryImg']
         API_EntryStaffCheck = config['LOCALSERVER']['API_EntryStaffCheck']
+        API_LogStaff = config['LOCALSERVER']['API_LogStaff']
         API_PostDruidData = config['DRUID']['API_PostDruidData']
         API_PostDruidQuery = config['DRUID']['API_PostDruidQuery']
         # Druid
@@ -98,6 +99,7 @@ class PiClient:
         ## API URLs
         self.postEntryImg = 'http://' + SERVER_HOST + ':' + SERVER_PORT + API_PostEntryImg
         self.postEntryStaffCheck = 'http://' + SERVER_HOST + ':' + SERVER_PORT + API_EntryStaffCheck
+        self.postLogStaff = 'http://' + SERVER_HOST + ':' + SERVER_PORT + API_LogStaff
 
         ## API Druid
         self.postData = 'http://' + DRUID_SERVER_HOST + ':' + DRUID_SERVER_PORT_DATA + API_PostDruidData
@@ -149,14 +151,14 @@ class PiClient:
 
     # Function to send raw data to druid server
     # Returns: NONE
-    def send_druid_data(self, type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message):
-        time = datetime.datetime.utcnow().isoformat()
+    def send_druid_data(self, timestamp, action, nodeID, staffID, staff_title, unit, room_number, response_type, response_message):
+        time = datetime.datetime.utcfromtimestamp(timestamp).isoformat()
 
         payload = {
             'time': time,
-            'type': type,
-            'nodeID': nodeID,
-            'staffID': staffID,
+            'type': action,
+            'node_id': nodeID,
+            'staff_id': staffID,
             'staff_title': staff_title,
             'unit': unit,
             'room_number': room_number,
@@ -231,7 +233,7 @@ class PiClient:
 
         # Send post request to the server
         try:
-            result = requests.post(self.postEntryImg, json=payload, headers=headers)
+            result = requests.post(self.postLogStaff, json=payload, headers=headers)
             result = result.json()
             self.logger.info("Someone entered the room and this was returned: " + str(result))
         except requests.exceptions.Timeout:
@@ -271,32 +273,23 @@ class PiClient:
             # be sent later to see if a further alert is needed.
 
             # Get data from MongoDB on that particular staff member
-            collection = self.mongo.test.jhm
-            staffDoc = collection.find_one({"Name": resultName})
-            nodDoc = collection.find_one({"NodeID": self.NODE_ID })
+            collection = self.mongo.kidsrkids.b35
+            staffDoc = collection.find_one({"name": resultName})
+            nodDoc = collection.find_one({"node_id": self.NODE_ID })
 
-             # Druid data schema : type, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
-            if(resultIsClean == False):
-                self.send_druid_data("Entry", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Entry", "Not clean")
-                self.logger.info("DRUID EVENT: " + "Entry," + nodDoc["NodeID"] + ","
-                    + staffDoc["Name"] + "," 
-                    + staffDoc["Title"] + ","
-                    + nodDoc["Unit"] + ","
-                    + nodDoc["RoomNumber"] + "," + "Entry," + "Not clean")
-                self.welcomequeue.put(resultName)
-            elif(resultIsClean == True):
-                self.send_druid_data("Entry", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Entry", "Clean")
-                self.logger.info("DRUID EVENT: " + "Entry," + nodDoc["NodeID"] + ","
-                    + staffDoc["Name"] + "," 
-                    + staffDoc["Title"] + ","
-                    + nodDoc["Unit"] + ","
-                    + nodDoc["RoomNumber"] + "," + "Entry," + "Clean")
-                self.welcomequeue.put(resultName)
-                return
+
+            # Now that we have a name for the face, just send the data up to Druid
+            # Druid data schema : timestamp, action, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
+            self.send_druid_data(timestamp, "Entry", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Entry", "None")
+            self.logger.info("DRUID EVENT: " + "Entry," + nodDoc["NodeID"] + ","
+                + staffDoc["Name"] + "," 
+                + staffDoc["Title"] + ","
+                + nodDoc["Unit"] + ","
+                + nodDoc["RoomNumber"] + "," + "Entry," + "None")
 
             # Determine the hygiene status of the staff member, if there is a staff member face and they are not on dispenser list
             ##### MIGHT HAVE TO MAKE THIS A LOOP IF WE HAVE MORE THAN 1 PERSON IN PHOTO #####
-            self.msgqueue.put(((timestamp + float(self.ALERT_TIME_DELAY)), resultName, headers))
+            #self.msgqueue.put(((timestamp + float(self.ALERT_TIME_DELAY)), resultName, headers))
 
 
     # Thread that will run in a loop that will constantly check in the pqueue for any payloads that need to be processed and sent to the server
@@ -312,7 +305,6 @@ class PiClient:
 
             ## Continuously grab the images from the queue and send it to the server
             if(not self.pqueue.empty()):
-
 
                 self.logger.info('Sending images to server')
 
@@ -340,114 +332,6 @@ class PiClient:
                     timestamp = None
                     payload = None
                     headers = None
-
-
-
-    # Thread that will constantly run on startup and only grab jobs from msgqueue that need to be sent
-    # to the server to determine if a second alert needs to be sent to a staff member
-    def alert_thread(self):
-        while(True):
-
-            # First check and see if we need to send welcome alerts to anyone who came into the room
-            if(not self.welcomequeue.empty()):
-                self.send_welcome(self.welcomequeue.get())
-
-            # Check queue to see if it has passed ALERT_TIME_DELAY secs from current time.
-            # We should only alert when this time threshold has passed to give the staff member
-            # time to conduct hand hygiene.
-            if(self.peek_timestamp_at_alert() == -1):
-                continue
-            elif(self.peek_timestamp_at_alert() - time.time() <= 0.0):
-
-                # Create list of names that need to be alerted
-                StaffList = []
-
-                # Dequeue head and then keep dequeuing until head is 1 second later than earliest timestamp
-                # Now that 30 sec have past, we need to check and see if they have actually washed their hands in that time-frame
-                timestamp, staffname, headers = self.msgqueue.get()
-                StaffList.append(staffname)
-
-                self.logger.info("Sending check to see if they washed hands")
-
-                # Send second post request again and check result (see if staff member has
-                # used a hand hygiene device yet.)
-                # If there is a face, and it is staff, and they are still not in the dispenser list, send an alert to them
-                # payload = {'StaffList': staffname, 'Timestamp': timestamp}
-                # namesToBeAlerted.append(staffname)
-
-
-                # Keep dequing the alert queue as long as the timestamps are the same (means that they were found in the same picture)
-                # and adding the names into the list
-                while(self.peek_timestamp_at_alert() == timestamp):
-                    t_timestamp, t_staffname, t_headers = self.msgqueue.get()
-                    StaffList.append(t_staffname)
-
-                payload = {'StaffList': StaffList, 'Timestamp': timestamp}
-
-                result = None
-                try:
-                    result = requests.post(self.postEntryStaffCheck, json=payload, headers=headers)
-                except requests.exceptions.Timeout:
-                    self.logger.error("Timeout due to unreliable server connection - dropping image")
-                    continue
-                except:
-                    self.logger.error("Tensorflow server unreachable, will save alert for later")
-                    continue
-
-                # When the server returns STATUS and NAME of staff member.
-                # Send an alert accordingly.
-                result = result.json()
-
-                self.logger.info("Alert: " + str(result))
-
-                # MongoDB
-                collection = self.mongo.test.jhm
-
-                # Returns [['name', 0/1], [name2, 0/1], ...]
-
-                isAllStaffClean = True
-
-                for i in range(len(result)):
-
-
-                    resultName = result[i][0]
-
-                    staffDoc = collection.find_one({"Name": resultName})
-                    nodDoc = collection.find_one({"NodeID": self.NODE_ID })
-
-
-                    # If one of these results are ever FALSE then that means we need to send out an alert because
-                    # one of these staff members are NOT CLEAN
-                    if result[i][1] == False:
-                        isAllStaffClean = False
-
-                        # Send Alert Given event to druid
-                        self.send_druid_data("Alert", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Alert", "Alert given")
-                        self.logger.info("DRUID EVENT: " + "Alert," + nodDoc["NodeID"] + ","
-                            + staffDoc["Name"] + "," 
-                            + staffDoc["Title"] + ","
-                            + nodDoc["Unit"] + ","
-                            + nodDoc["RoomNumber"] + "," + "Alert," + "Alert given")
-                        continue
-                    else:
-                        # Staff member is clean, send event to druid, DO NOT give alert
-                        self.send_druid_data("Alert", nodDoc["NodeID"], staffDoc["Name"], staffDoc["Title"], nodDoc["Unit"], nodDoc["RoomNumber"], "Alert", "No alert")
-                        self.logger.info("DRUID EVENT: " + "Alert," + nodDoc["NodeID"] + ","
-                            + staffDoc["Name"] + "," 
-                            + staffDoc["Title"] + ","
-                            + nodDoc["Unit"] + ","
-                            + nodDoc["RoomNumber"] + "," + "Alert," + "No alert")
-
-
-
-                if isAllStaffClean == False:
-                    self.send_alert("reminder")
-                else:
-                    self.send_alert("clean")
-
-                ## If we get "Status" = True message then that means that the staff member has breached protocol and not washed
-                ## their hands within the 20 second period. If "Status" = False the staff member is clean and has used a soap dispenser within
-                ## the alloted timeframe
 
 
     # #### MIGHT BE REMOVED IN FUTURE RELEASE ####
