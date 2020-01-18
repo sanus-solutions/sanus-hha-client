@@ -168,7 +168,7 @@ class PiClient:
 
         try:
             result = requests.post(self.postData, json=payload, headers=self.DRUID_SERVER_HEADERS)
-
+            print(result.json())
             # If druid connection is healthy, then check if there are any failedEvents to send up as well
             if(len(self.failedEventsList) > 0):
                 print("sending failed event to druid")
@@ -241,9 +241,9 @@ class PiClient:
             return
         except Exception as e:
             self.logger.error("Exception is: " + str(e))
-            text_file = open("log/"+str(timestamp)+".txt", "w")
-            text_file.write(payload["Image"])
-            text_file.close()
+            # text_file = open("log/"+str(timestamp)+".txt", "w")
+            # text_file.write(payload["Image"])
+            # text_file.close()
             return
 
         # If no face was found on Recognition or TF server, then get out of this thread and drop
@@ -272,16 +272,20 @@ class PiClient:
             # be sent later to see if a further alert is needed.
 
             # Get data from MongoDB on that particular staff member
-            collection = self.mongo.kidsrkids.b35
+            collection = self.mongo.ray.employees
             staffDoc = collection.find_one({"name": resultName})
-            nodDoc = collection.find_one({"node_id": self.NODE_ID })
+
+            if staffDoc == None:
+                return
+
+            # Get the list of cameras for the daycare
+            collection = self.mongo.ray.cameras
+            nodDoc = collection.find_one({"node_id": self.NODE_ID})
 
             print("MongoDB returned: " + staffDoc["name"])
 
-            # Now that we have a name for the face, just send the data up to Druid
-            # Druid data schema : timestamp, action, nodeID, staffID, staff_title, unit, room_number, response_type, response_message
-            self.send_druid_data(timestamp, "Entry", nodDoc["node_id"], staffDoc["name"], staffDoc["title"], nodDoc["unit"], nodDoc["room_number"], "Entry", "None")
-            self.logger.info("DRUID EVENT: " + "Entry," + nodDoc["node_id"] + ","
+            # Save event that will be sent to Mongo
+            self.logger.info("MONGO EVENT: " + "Entry," + nodDoc["node_id"] + ","
                 + staffDoc["name"] + "," 
                 + staffDoc["title"] + ","
                 + nodDoc["unit"] + ","
@@ -301,7 +305,7 @@ class PiClient:
                 'response_type': "Entry",
                 'response_message': "None"
             }
-            collection = self.mongo.kidsrkids.b35.history
+            collection = self.mongo.ray.map
             collection.insert_one(new_doc)
 
             # Determine the hygiene status of the staff member, if there is a staff member face and they are not on dispenser list

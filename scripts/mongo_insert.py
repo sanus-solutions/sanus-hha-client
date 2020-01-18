@@ -19,22 +19,52 @@ collection = client.kidsrkids.b35
 
 new_docs = [
 	{
-		"node_id" : "0",
-		"unit": "None",
-		"room_number": "Pilot",
-		"department": "None"
-	}, {
 
-		"staff_id": "00001",
-		"name": "fucboi",
+		"staff_id": "00003",
+		"name": "Ray",
 		"title": "admin",
 		"department": "None",
 		"unit": "None",
 	}, {
 
-		"staff_id": "00002",
-		"name": "klaus",
+		"staff_id": "00004",
+		"name": "Stephanie",
 		"title": "admin",
+		"department": "None",
+		"unit": "None",
+	}, {
+
+		"staff_id": "00005",
+		"name": "Jennifer",
+		"title": "admin",
+		"department": "None",
+		"unit": "None",
+	}, {
+
+		"staff_id": "00006",
+		"name": "Heather",
+		"title": "admin",
+		"department": "None",
+		"unit": "None",
+	}, {
+
+		"staff_id": "00007",
+		"name": "Tajuana",
+		"title": "admin",
+		"department": "None",
+		"unit": "None",
+	}, {
+
+		"staff_id": "00008",
+		"name": "Michelle",
+		"title": "staff",
+		"department": "None",
+		"unit": "None",
+	}, {
+
+		"staff_id": "00009",
+		"name": "Summer",
+		"title": "staff",
 		"department": "None",
 		"unit": "None",
 	}
